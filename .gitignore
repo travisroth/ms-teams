@@ -1,5 +1,8 @@
 addon/doc/*.css
 addon/doc/en/
+.venv/
+.ruff_cache/
+__pycache__/
 *_docHandler.py
 *.html
 manifest.ini
