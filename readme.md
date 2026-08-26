@@ -16,8 +16,8 @@ keyboard focus.
 
 The selected message is presented with `ui.message()` for speech and braille.
 Teams virtualizes older content, so a message outside the current accessibility
-tree is reported as unavailable. These gestures override Teams' own
-Ctrl+Shift+number app-switching shortcuts while this AppModule is active.
+tree is reported as unavailable. Note: these gestures override Teams' own
+Ctrl+Shift+number app-switching shortcuts in web browser view while this AppModule is active. This appModule is intended for the Windows client and not tested in web view.
 
 ## Noise filtering
 
