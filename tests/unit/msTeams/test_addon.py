@@ -1,4 +1,9 @@
-"""Isolated tests for the Teams AppModule and global plugin."""
+"""Isolated tests for the Teams AppModule.
+
+The add-on has no global plugin. ``addon/appModules/ms-teams.py`` is named after
+the executable, so NVDA loads it for ``ms-teams.exe`` without any registration.
+The hyphen keeps it out of normal import syntax, hence the loader below.
+"""
 
 from __future__ import annotations
 
@@ -9,11 +14,6 @@ import types
 import unittest
 
 
-class _Role:
-	GROUPING = 1
-	LISTITEM = 2
-
-
 class _AppModuleBase:
 	def __init__(self, *args, **kwargs):
 		pass
@@ -22,48 +22,43 @@ class _AppModuleBase:
 		pass
 
 
-class _GlobalPluginBase:
-	def __init__(self, *args, **kwargs):
-		pass
+class _NVDAObjectBase:
+	"""Stand-in for NVDAObject.
 
-	def terminate(self, *args, **kwargs):
-		pass
+	Only used as a base class for the overlay. NVDA's auto property metaclass
+	cannot be reproduced here, so the overlay's property behaviour is exercised
+	in NVDA itself rather than in these tests.
+	"""
 
+	def _get_name(self):
+		return ""
 
-class _BrailleRegion:
-	def __init__(self, rawText=""):
-		self.rawText = rawText
-		self.rawTextTypeforms = None
-		self.cursorPos = None
-		self.selectionStart = None
-		self.selectionEnd = None
-		self.brailleCells = []
+	def _get_description(self):
+		return ""
 
-	def update(self):
-		self.brailleCells = list(self.rawText)
+	def _get_value(self):
+		return ""
 
+	def _get_placeholder(self):
+		return ""
 
-class _BrailleBuffer:
-	def __init__(self, regions=()):
-		self.visibleRegions = list(regions)
-		self.rawText = ""
-		self.brailleCells = []
-
-	def update(self):
-		self.rawText = "".join(region.rawText for region in self.visibleRegions)
-		self.brailleCells = [cell for region in self.visibleRegions for cell in region.brailleCells]
+	def _get_errorMessage(self):
+		return ""
 
 
 class _BrailleHandler:
+	"""Mirrors the shape the add-on relies on.
+
+	``message`` is a class level method, so assigning to ``handler.message``
+	creates an instance attribute and deleting it exposes the method again,
+	exactly as with NVDA's real handler.
+	"""
+
 	def __init__(self):
-		self.mainBuffer = object()
-		self.messageBuffer = object()
-		self.buffer = self.mainBuffer
 		self.messages = []
 
 	def message(self, text):
 		self.messages.append(text)
-		self.buffer = self.messageBuffer
 
 
 class _UIAElement:
@@ -107,42 +102,28 @@ def _scriptDecorator(**metadata):
 	def decorate(function):
 		function.gestures = list(metadata.get("gestures", ()))
 		return function
+
 	return decorate
 
 
-registrationCalls = []
 uiMessages = []
 uiaClient = _UIAClient()
-
-
-def _registerExecutable(executableName, appModuleName):
-	registrationCalls.append(("register", executableName, appModuleName))
-
-
-def _unregisterExecutable(executableName):
-	registrationCalls.append(("unregister", executableName))
-
+brailleHandler = _BrailleHandler()
 
 stubs = {
 	"api": types.SimpleNamespace(
 		getFocusObject=lambda: None,
 		getForegroundObject=lambda: types.SimpleNamespace(windowHandle=100),
 	),
-	"appModuleHandler": types.SimpleNamespace(
-		AppModule=_AppModuleBase,
-		registerExecutableWithAppModule=_registerExecutable,
-		unregisterExecutable=_unregisterExecutable,
-	),
-	"controlTypes": types.SimpleNamespace(Role=_Role),
-	"globalPluginHandler": types.SimpleNamespace(GlobalPlugin=_GlobalPluginBase),
-	"braille": types.SimpleNamespace(
-		Region=_BrailleRegion,
-		BrailleBuffer=_BrailleBuffer,
-		BrailleHandler=_BrailleHandler,
-	),
+	"appModuleHandler": types.SimpleNamespace(AppModule=_AppModuleBase),
+	"braille": types.SimpleNamespace(handler=brailleHandler),
 	"logHandler": types.SimpleNamespace(
-		log=types.SimpleNamespace(debugWarning=lambda *args, **kwargs: None),
+		log=types.SimpleNamespace(
+			debugWarning=lambda *args, **kwargs: None,
+			info=lambda *args, **kwargs: None,
+		),
 	),
+	"NVDAObjects": types.SimpleNamespace(NVDAObject=_NVDAObjectBase),
 	"scriptHandler": types.SimpleNamespace(script=_scriptDecorator),
 	"UIAHandler": types.SimpleNamespace(
 		handler=types.SimpleNamespace(clientObject=uiaClient, baseCacheRequest=object()),
@@ -156,23 +137,35 @@ stubs = {
 for name, stub in stubs.items():
 	sys.modules[name] = stub
 
+# No speech stub: the add-on falls back to filter_speechSequence = None and the
+# filter is called directly below instead of through the extension point.
+
 repoRoot = Path(__file__).resolve().parents[3]
-appModulePath = repoRoot / "addon" / "appModules" / "ms_teams.py"
+appModulePath = repoRoot / "addon" / "appModules" / "ms-teams.py"
 appModuleSpec = importlib.util.spec_from_file_location("msTeamsTestAppModule", appModulePath)
 appModule = importlib.util.module_from_spec(appModuleSpec)
 assert appModuleSpec.loader is not None
 appModuleSpec.loader.exec_module(appModule)
 
-appModulesPackage = types.ModuleType("appModules")
-appModulesPackage.__path__ = []
-sys.modules["appModules"] = appModulesPackage
-sys.modules["appModules.ms_teams"] = appModule
 
-globalPluginPath = repoRoot / "addon" / "globalPlugins" / "msTeamsMessageHelpFilter.py"
-globalPluginSpec = importlib.util.spec_from_file_location("msTeamsTestGlobalPlugin", globalPluginPath)
-globalPlugin = importlib.util.module_from_spec(globalPluginSpec)
-assert globalPluginSpec.loader is not None
-globalPluginSpec.loader.exec_module(globalPlugin)
+class _TeamsAppModuleFixture(unittest.TestCase):
+	"""Creates an AppModule with a focus object that belongs to it."""
+
+	def setUp(self):
+		uiMessages.clear()
+		uiaClient.elements = []
+		brailleHandler.messages.clear()
+		self.instance = appModule.AppModule()
+		self.addCleanup(self.instance.terminate)
+		self.addCleanup(setattr, stubs["api"], "getFocusObject", lambda: None)
+
+	def focusTeams(self):
+		focus = types.SimpleNamespace(appModule=self.instance)
+		stubs["api"].getFocusObject = lambda: focus
+
+	def focusElsewhere(self):
+		focus = types.SimpleNamespace(appModule=object())
+		stubs["api"].getFocusObject = lambda: focus
 
 
 class NavigationHelpTests(unittest.TestCase):
@@ -194,24 +187,114 @@ class NavigationHelpTests(unittest.TestCase):
 	def testInstructionOnlyBecomesEmpty(self):
 		self.assertEqual(appModule.filterNavigationHelp("Press Enter to explore message content."), "")
 
+	def testLiveRegionWordingBecomesEmpty(self):
+		# Captured verbatim from a Chromium live region, trailing space included.
+		text = "Press Enter to explore message content, then use Escape to shift focus back to the message.. "
+		self.assertEqual(appModule.filterNavigationHelp(text), "")
+
 	def testPunctuationResidueBecomesEmpty(self):
 		self.assertEqual(appModule.filterNavigationHelp("Press Enter to explore message content. ."), "")
 		self.assertEqual(appModule.filterNavigationHelp("Press Enter to explore message content…."), "")
 
 	def testUnrelatedContentIsUnchanged(self):
-		self.assertEqual(appModule.filterNavigationHelp("Press Enter to send the message."), "Press Enter to send the message.")
+		self.assertEqual(
+			appModule.filterNavigationHelp("Press Enter to send the message."),
+			"Press Enter to send the message.",
+		)
 
 	def testMultilineContentIsPreserved(self):
 		text = "First line\nSecond line\nPress Enter to explore message content."
 		self.assertEqual(appModule.filterNavigationHelp(text), "First line\nSecond line")
 
 
-class RecentMessageTests(unittest.TestCase):
-	def setUp(self):
-		uiMessages.clear()
-		uiaClient.elements = []
-		stubs["api"].getFocusObject = lambda: None
+class SuppressedAnnouncementTests(unittest.TestCase):
+	def testFilterCountIsSuppressed(self):
+		for text in ("7 results ", "7 results", "1 result", "0 results", "No results"):
+			with self.subTest(text=text):
+				self.assertTrue(appModule.isSuppressedAnnouncement(text))
 
+	def testSendProgressIsSuppressed(self):
+		for text in ("Sending", "Sending... ", "Message sent", "Message sent ", "Sent!"):
+			with self.subTest(text=text):
+				self.assertTrue(appModule.isSuppressedAnnouncement(text))
+
+	def testFailuresAreStillAnnounced(self):
+		for text in ("Message not sent", "Failed to send message", "Resending"):
+			with self.subTest(text=text):
+				self.assertFalse(appModule.isSuppressedAnnouncement(text))
+
+	def testIncomingMessagesAreStillAnnounced(self):
+		for text in (
+			"Message from Ryan Praeuner. heres another message! ",
+			"Unread message Chat Ryan Praeuner Available",
+			"7 results found in chat",
+		):
+			with self.subTest(text=text):
+				self.assertFalse(appModule.isSuppressedAnnouncement(text))
+
+
+class BrailleMessageFilterTests(_TeamsAppModuleFixture):
+	def testNavigationHelpNeverReachesTheDisplay(self):
+		self.focusTeams()
+		appModule.braille.handler.message("Press Enter to explore message content.")
+		self.assertEqual(brailleHandler.messages, [])
+
+	def testSuppressedAnnouncementsNeverReachTheDisplay(self):
+		self.focusTeams()
+		appModule.braille.handler.message("7 results ")
+		appModule.braille.handler.message("Message sent ")
+		self.assertEqual(brailleHandler.messages, [])
+
+	def testUsefulAnnouncementsAreUntouched(self):
+		self.focusTeams()
+		appModule.braille.handler.message("Message from Ryan Praeuner. hello! ")
+		self.assertEqual(brailleHandler.messages, ["Message from Ryan Praeuner. hello! "])
+
+	def testEmbeddedHelpIsStrippedFromRealContent(self):
+		self.focusTeams()
+		appModule.braille.handler.message("Ryan: see attached. Press Enter to explore message content.")
+		self.assertEqual(brailleHandler.messages, ["Ryan: see attached."])
+
+	def testOtherApplicationsAreUnaffected(self):
+		self.focusElsewhere()
+		appModule.braille.handler.message("7 results ")
+		self.assertEqual(brailleHandler.messages, ["7 results "])
+
+	def testHandlerIsRestoredOnTerminate(self):
+		original = _BrailleHandler.message
+		self.instance.terminate()
+		self.assertIs(type(brailleHandler).message, original)
+		self.assertNotIn("message", brailleHandler.__dict__)
+		# terminate runs again via addCleanup, which must stay harmless.
+
+
+class SpeechFilterTests(_TeamsAppModuleFixture):
+	def testSuppressedAnnouncementSilencesTheSequence(self):
+		self.focusTeams()
+		self.assertEqual(self.instance._filterSpeechSequence(["7 results "]), [])
+
+	def testNavigationHelpIsStripped(self):
+		self.focusTeams()
+		self.assertEqual(
+			self.instance._filterSpeechSequence(["Ryan: hi. Press Enter to explore message content."]),
+			["Ryan: hi."],
+		)
+
+	def testNonStringCommandsSurvive(self):
+		self.focusTeams()
+		command = object()
+		self.assertEqual(
+			self.instance._filterSpeechSequence([command, "Press Enter to explore message content."]),
+			[command, ""],
+		)
+
+	def testOtherApplicationsAreUnaffected(self):
+		self.focusElsewhere()
+		sequence = ["7 results "]
+		self.assertIs(self.instance._filterSpeechSequence(sequence), sequence)
+
+
+class RecentMessageTests(_TeamsAppModuleFixture):
 	def testReadsNewestFirstWithoutMovingFocus(self):
 		oldFocus = object()
 		stubs["api"].getFocusObject = lambda: oldFocus
@@ -220,75 +303,27 @@ class RecentMessageTests(unittest.TestCase):
 			_UIAElement("message-body-100", "Older message Alice Today at 1:00 PM."),
 			_UIAElement("message-body-200", "Newest message Bob Today at 1:01 PM."),
 		]
-		instance = appModule.AppModule()
-		try:
-			instance.script_readRecentMessage(types.SimpleNamespace(mainKeyName="1"))
-			instance.script_readRecentMessage(types.SimpleNamespace(mainKeyName="2"))
-			self.assertEqual(
-				uiMessages,
-				[
-					"Newest message Bob Today at 1:01 PM.",
-					"Older message Alice Today at 1:00 PM.",
-				],
-			)
-			self.assertIs(stubs["api"].getFocusObject(), oldFocus)
-		finally:
-			instance.terminate()
+		self.instance.script_readRecentMessage(types.SimpleNamespace(mainKeyName="1"))
+		self.instance.script_readRecentMessage(types.SimpleNamespace(mainKeyName="2"))
+		self.assertEqual(
+			uiMessages,
+			[
+				"Newest message Bob Today at 1:01 PM.",
+				"Older message Alice Today at 1:00 PM.",
+			],
+		)
+		self.assertIs(stubs["api"].getFocusObject(), oldFocus)
 
 	def testReportsVirtualizedMessageUnavailable(self):
 		uiaClient.elements = [_UIAElement("message-body-200", "Only rendered message")]
-		instance = appModule.AppModule()
-		try:
-			instance.script_readRecentMessage(types.SimpleNamespace(mainKeyName="3"))
-			self.assertEqual(uiMessages, ["Recent message 3 is not available"])
-		finally:
-			instance.terminate()
+		self.instance.script_readRecentMessage(types.SimpleNamespace(mainKeyName="3"))
+		self.assertEqual(uiMessages, ["Recent message 3 is not available"])
 
 	def testGesturesCoverOneThroughNine(self):
 		self.assertEqual(
 			appModule.AppModule.script_readRecentMessage.gestures,
 			[f"kb:control+shift+{number}" for number in range(1, 10)],
 		)
-
-
-class GlobalPluginTests(unittest.TestCase):
-	def setUp(self):
-		registrationCalls.clear()
-		stubs["api"].getFocusObject = lambda: None
-
-	def testExecutableMappingIsRegisteredAndRestored(self):
-		originalUpdate = _BrailleBuffer.update
-		originalMessage = _BrailleHandler.message
-		plugin = globalPlugin.GlobalPlugin()
-		self.assertEqual(registrationCalls, [("register", "ms-teams", "ms_teams")])
-		plugin.terminate()
-		self.assertEqual(registrationCalls[-1], ("unregister", "ms-teams"))
-		self.assertIs(_BrailleBuffer.update, originalUpdate)
-		self.assertIs(_BrailleHandler.message, originalMessage)
-
-	def testInstructionDoesNotActivateMessageBuffer(self):
-		teamsApp = types.SimpleNamespace(appName="ms-teams")
-		focus = types.SimpleNamespace(appModule=teamsApp)
-		stubs["api"].getFocusObject = lambda: focus
-		plugin = globalPlugin.GlobalPlugin()
-		try:
-			handler = _BrailleHandler()
-			handler.message("Press Enter to explore message content.")
-			self.assertEqual(handler.messages, [])
-			self.assertIs(handler.buffer, handler.mainBuffer)
-		finally:
-			plugin.terminate()
-
-	def testBrailleRegionIsRetranslated(self):
-		text = "Hello. Press Enter to explore message content. group"
-		region = _BrailleRegion(text)
-		region.rawTextTypeforms = list(range(len(text)))
-		region.cursorPos = len(text)
-		self.assertTrue(globalPlugin._filterBrailleRegion(region))
-		self.assertEqual(region.rawText, "Hello. group")
-		self.assertNotIn("explore message", "".join(region.brailleCells).lower())
-		self.assertEqual(len(region.rawTextTypeforms), len(region.rawText))
-		self.assertEqual(region.cursorPos, len(region.rawText))
 
 
 if __name__ == "__main__":
