@@ -126,7 +126,11 @@ exclude = [
 	# paths are relative to the configuration file.
 ]
 
-# Tell pyright where to load python code from
+# Tell pyright where to load python code from.
+# "../nvda/source" is an NVDA source checkout beside this repo. It is present on
+# a developer machine but never in CI, so the NVDA modules an add-on imports at
+# runtime cannot be resolved there. Reporting that as an error fails every CI
+# build, so it is downgraded below rather than dropping the path.
 extraPaths = [
 	"./addon",
 	"../nvda/source",
@@ -170,7 +174,8 @@ reportInvalidTypeArguments = true
 reportInvalidTypeForm = true
 reportInvalidTypeVarUse = true
 reportMatchNotExhaustive = true
-reportMissingImports = true
+# NVDA provides these modules at runtime; see the note on extraPaths above.
+reportMissingImports = false
 reportMissingModuleSource = true
 reportMissingParameterType = true
 reportMissingSuperCall = true

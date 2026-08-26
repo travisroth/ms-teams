@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 import time
 import traceback
-from typing import Optional, Sequence
+from typing import Optional, Sequence, TypeGuard
 import unicodedata
 
 import api
@@ -113,7 +113,8 @@ def _containsOnlyPunctuationOrSpacing(text: object) -> bool:
 	)
 
 
-def _mightContainNavigationHelp(text: object) -> bool:
+def _mightContainNavigationHelp(text: object) -> TypeGuard[str]:
+	"""Cheap check that also narrows ``text`` to ``str`` for the caller."""
 	return isinstance(text, str) and _NAVIGATION_HELP_HINT in text.lower()
 
 
@@ -391,7 +392,8 @@ class AppModule(appModuleHandler.AppModule):
 			return
 		if self._brailleMessageFilter is not None:
 			return
-		self._originalBrailleMessage = handler.message
+		originalMessage = handler.message
+		self._originalBrailleMessage = originalMessage
 
 		def filteredBrailleMessage(text, *args, **kwargs):
 			if self._traceEvents:
@@ -403,7 +405,7 @@ class AppModule(appModuleHandler.AppModule):
 				if not filtered:
 					return
 				text = filtered
-			return self._originalBrailleMessage(text, *args, **kwargs)
+			return originalMessage(text, *args, **kwargs)
 
 		self._brailleMessageFilter = filteredBrailleMessage
 		handler.message = filteredBrailleMessage
