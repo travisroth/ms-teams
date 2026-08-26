@@ -5,9 +5,9 @@ from site_scons.site_tools.NVDATool.utils import _
 
 
 addon_info = AddonInfo(
-	addon_name="msTeamsMessageHelpFilter",
+	addon_name="Ms-Teams",
 	# Translators: Summary/title shown in NVDA's Add-on Store and Add-on Manager.
-	addon_summary=_("Microsoft Teams accessibility enhancements"),
+	addon_summary=_("Microsoft Teams accessibility enhancements fixing repetitive messages and adding focus-free recent-message reading commands."),
 	# Translators: Long add-on description shown in NVDA's Add-on Store.
 	addon_description=_(
 		"Filters repetitive message help and adds focus-free recent-message reading commands "
