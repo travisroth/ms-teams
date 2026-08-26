@@ -1,7 +1,11 @@
 # Microsoft Teams Accessibility Enhancements for NVDA
 # Copyright (C) 2026 Ryan Praeuner and contributors
 # SPDX-License-Identifier: GPL-2.0-or-later
-# pyright: basic, reportArgumentType=false, reportAttributeAccessIssue=false, reportOptionalMemberAccess=false
+# NVDA supplies every import below at runtime. A source checkout is not present in
+# CI, so the file-level basic mode, which resets rule severities, must switch the
+# missing import rule off here as well as in pyproject.toml.
+# pyright: basic, reportMissingImports=false, reportArgumentType=false
+# pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false
 
 """Improve message navigation and presentation in the New Microsoft Teams client."""
 
