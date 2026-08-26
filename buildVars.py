@@ -5,27 +5,29 @@ from site_scons.site_tools.NVDATool.utils import _
 
 
 addon_info = AddonInfo(
-	addon_name="msTeamsMessageHelpFilter",
+	addon_name="Ms-Teams",
 	# Translators: Summary/title shown in NVDA's Add-on Store and Add-on Manager.
-	addon_summary=_("Microsoft Teams accessibility enhancements"),
+	addon_summary=_("Microsoft Teams accessibility enhancements fixing repetitive messages and adding focus-free recent-message reading commands."),
 	# Translators: Long add-on description shown in NVDA's Add-on Store.
 	addon_description=_(
 		"Filters repetitive message help and adds focus-free recent-message reading commands "
 		+ "for the New Microsoft Teams client.",
 	),
-	addon_version="1.5.0",
+	addon_version="1.6.0",
 	# Translators: Changes in this release, shown in NVDA's Add-on Store.
 	addon_changelog=_(
-		"Migrated to the official NVDA add-on template. Includes navigation-help filtering "
-		+ "for speech and braille, punctuation-flash suppression, and Ctrl+Shift+1 through "
-		+ "Ctrl+Shift+9 recent-message reading commands.",
+		"Removed the global plugin and all braille monkey patching of BrailleHandler.update. "
+		+ "The app module is now named after the executable, so NVDA loads it without "
+		+ "registration. Navigation help is filtered at the NVDAObject properties, and "
+		+ "Chromium live region announcements are filtered where they enter NVDA. Also "
+		+ "suppresses the chat list filter count and send progress announcements.",
 	),
 	addon_author="Ryan Praeuner; Travis Roth <travis@travisroth.com>",
 	addon_url="https://github.com/travisroth/ms-teams",
 	addon_sourceURL="https://github.com/travisroth/ms-teams",
 	addon_docFileName="readme.html",
-	addon_minimumNVDAVersion="2024.1",
-	addon_lastTestedNVDAVersion="2026.1.1",
+	addon_minimumNVDAVersion="2026.1",
+	addon_lastTestedNVDAVersion="2026.3",
 	addon_updateChannel=None,
 	addon_license="GNU General Public License version 2 or later",
 	addon_licenseURL="https://github.com/travisroth/ms-teams/blob/master/COPYING.txt",
@@ -33,7 +35,6 @@ addon_info = AddonInfo(
 
 pythonSources: list[str] = [
 	"addon/appModules/*.py",
-	"addon/globalPlugins/*.py",
 ]
 
 i18nSources: list[str] = pythonSources + ["buildVars.py"]
