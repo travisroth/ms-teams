@@ -271,6 +271,21 @@ class TeamsMessage(TeamsMessageHelpFilterOverlay):
 	#: the rows of a multi-line braille display.
 	brlMultilineFlowRun = True
 
+	def _get_states(self):
+		"""Undo a side effect of claiming the LISTITEM role.
+
+		``IAccessible._get_states`` discards EDITABLE when READONLY is present,
+		but deliberately skips that for LIST and LISTITEM, where Firefox uses the
+		combination to mark an interactive list. A Teams message is not editable,
+		and leaving EDITABLE in place flips ``_hasNavigableText``, which makes
+		``getObjectSpeech`` report the object's text content instead of its
+		properties and suppresses the value in ``NVDAObjectRegion``. The role is
+		wanted for presentation only, so the state is put back as it was.
+		"""
+		states = super()._get_states()
+		states.discard(controlTypes.State.EDITABLE)
+		return states
+
 	def _flowStep(self, forward: bool):
 		"""Walk one message along the history.
 
@@ -572,7 +587,17 @@ class AppModule(appModuleHandler.AppModule):
 		"""
 		lines = []
 		try:
-			lines.append(f"isMessage={_isMessageObject(obj)} elementId={_getElementId(obj)!r}")
+			# Report the applied class, not _isMessageObject. That helper checks
+			# for the GROUPING role Teams supplies, which TeamsMessage has already
+			# replaced by the time anything can be inspected, so calling it here
+			# would always say False on a message.
+			lines.append(
+				f"isMessage={isinstance(obj, TeamsMessage)}"
+				f" elementId={_getElementId(obj)!r}"
+				f" states={getattr(obj, 'states', None)!r}"
+				f" hasNavigableText={getattr(obj, '_hasNavigableText', None)!r}"
+				f" TextInfo={getattr(type(obj), 'TextInfo', None)!r}",
+			)
 			lines.append(f"IA2Attributes={getattr(obj, 'IA2Attributes', None)!r}")
 			ancestor = obj
 			for level in range(4):

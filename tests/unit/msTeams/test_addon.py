@@ -21,6 +21,11 @@ class _Role:
 	LISTITEM = 2
 
 
+class _State:
+	EDITABLE = "editable"
+	READONLY = "readonly"
+
+
 class _AppModuleBase:
 	def __init__(self, *args, **kwargs):
 		pass
@@ -51,6 +56,9 @@ class _NVDAObjectBase:
 
 	def _get_errorMessage(self):
 		return ""
+
+	def _get_states(self):
+		return set(getattr(self, "baseStates", ()))
 
 
 class _BrailleHandler:
@@ -124,7 +132,7 @@ stubs = {
 	),
 	"appModuleHandler": types.SimpleNamespace(AppModule=_AppModuleBase),
 	"braille": types.SimpleNamespace(handler=brailleHandler),
-	"controlTypes": types.SimpleNamespace(Role=_Role),
+	"controlTypes": types.SimpleNamespace(Role=_Role, State=_State),
 	"logHandler": types.SimpleNamespace(
 		log=types.SimpleNamespace(
 			debugWarning=lambda *args, **kwargs: None,
@@ -407,6 +415,18 @@ class MultilineFlowTests(unittest.TestCase):
 
 	def testRunIsDeclared(self):
 		self.assertTrue(appModule.TeamsMessage.brlMultilineFlowRun)
+
+	def testEditableStateIsNotInheritedFromTheListItemRole(self):
+		# IAccessible keeps EDITABLE beside READONLY for LIST and LISTITEM. That
+		# would flip _hasNavigableText and change how the object is presented.
+		message = appModule.TeamsMessage()
+		message.baseStates = {_State.READONLY, _State.EDITABLE}
+		self.assertEqual(message._get_states(), {_State.READONLY})
+
+	def testOtherStatesSurvive(self):
+		message = appModule.TeamsMessage()
+		message.baseStates = {_State.READONLY}
+		self.assertEqual(message._get_states(), {_State.READONLY})
 
 	def testWalksForwardAndBack(self):
 		messages = _buildHistory(["message-body-1", "message-body-2", "message-body-3"])
