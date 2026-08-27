@@ -70,6 +70,13 @@ This add-on imports nothing from BrlMultiline and does not depend on it. The
 declaration is a class attribute and two traversal methods that nothing in NVDA
 reads, so the module behaves identically when BrlMultiline is absent.
 
+The chat history container declares itself too, so the history can be pinned to
+a display or segment and stay under the fingers while focus is elsewhere. It
+supplies its own starting point, the newest message, because BrlMultiline would
+otherwise start at the first member, which is right for a list and wrong for a
+chat. A reader already on a message always wins over that, so it only decides
+where a pin made from elsewhere begins.
+
 The traversal is bounded. Messages are not siblings of each other, so a step
 climbs to the wrapper, moves to its next or previous sibling, then descends to
 the message it holds. Wrappers holding no message, such as timestamps and the

@@ -78,6 +78,9 @@ _SUPPRESSED_ANNOUNCEMENT_PATTERNS = (
 _PUNCTUATION_NOTIFICATION_GRACE_SECONDS = 0.75
 _MESSAGE_AUTOMATION_ID_PREFIX = "message-body-"
 
+#: DOM id of the element holding every message wrapper in the chat history.
+_MESSAGE_LIST_ELEMENT_ID = "chat-pane-list"
+
 #: IAccessible2 object attributes that may carry the DOM id. Teams is exposed
 #: through IAccessible2, not UIA, so the automation id used by the recent-message
 #: command is read here from the IA2 attributes instead.
@@ -187,6 +190,15 @@ def _isMessageObject(obj) -> bool:
 	except Exception:
 		return False
 	return _getElementId(obj).startswith(_MESSAGE_AUTOMATION_ID_PREFIX)
+
+
+def _isMessageListObject(obj) -> bool:
+	"""Is this the container holding the whole chat history?
+
+	Matched on the DOM id alone. The id is specific enough on its own, and not
+	pinning it to a role leaves it working if Teams re-roles the element.
+	"""
+	return _getElementId(obj) == _MESSAGE_LIST_ELEMENT_ID
 
 
 def _findMessageWithin(obj, depth: int):
@@ -317,6 +329,50 @@ class TeamsMessage(TeamsMessageHelpFilterOverlay):
 		return self._flowStep(forward=False)
 
 
+class TeamsMessageList(TeamsMessageHelpFilterOverlay):
+	"""The container holding the whole chat history.
+
+	Declared so BrlMultiline can pin the chat history to a display or segment and
+	keep it under the fingers while focus is elsewhere. Like the members, these
+	attributes are inert unless that add-on is running.
+	"""
+
+	#: Declares that this container holds a run whose members declare
+	#: ``brlMultilineFlowRun``.
+	brlMultilineFlowRunContainer = True
+
+	def brlMultilineFlowRunStart(self):
+		"""The message to begin at when the run is pinned: the newest.
+
+		Without this, BrlMultiline searches the container and finds the first
+		member, which is right for a list and wrong for a chat history, where the
+		newest message is the one worth having under the fingers. A reader already
+		on a message always wins over this, so it only decides where a pin made
+		from elsewhere starts.
+
+		Walking back from the last child is far cheaper than the UIA query behind
+		the recent-message command, which enumerates every descendant group, and
+		it yields the object rather than its text.
+		"""
+		try:
+			wrapper = self.lastChild
+		except Exception:
+			log.debugWarning("Could not reach the end of the Teams chat history", exc_info=True)
+			return None
+		for _ in range(_FLOW_SIBLING_LIMIT):
+			if wrapper is None:
+				return None
+			message = _findMessageWithin(wrapper, _FLOW_DESCENT_DEPTH)
+			if message is not None:
+				return message
+			try:
+				wrapper = wrapper.previous
+			except Exception:
+				log.debugWarning("Could not step back through Teams message wrappers", exc_info=True)
+				return None
+		return None
+
+
 class AppModule(appModuleHandler.AppModule):
 	"""NVDA support for ``ms-teams.exe`` (New Microsoft Teams)."""
 
@@ -434,7 +490,13 @@ class AppModule(appModuleHandler.AppModule):
 		# so caches the unfiltered values for this core cycle before the overlay
 		# is in place. TeamsMessage subclasses the filter, so inserting it alone
 		# is enough, and NVDA drops the redundant base when building the type.
-		clsList.insert(0, TeamsMessage if _isMessageObject(obj) else TeamsMessageHelpFilterOverlay)
+		if _isMessageObject(obj):
+			overlay = TeamsMessage
+		elif _isMessageListObject(obj):
+			overlay = TeamsMessageList
+		else:
+			overlay = TeamsMessageHelpFilterOverlay
+		clsList.insert(0, overlay)
 
 	def event_UIA_notification(
 		self,

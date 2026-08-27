@@ -188,12 +188,15 @@ def _buildHistory(shape):
 
 	An entry of None makes a wrapper holding no message, which is what Teams
 	produces for timestamps and for the emoji pop-over beside a focused message.
-	Returns the messages in order, keyed by id.
+	Returns the declared container and the messages, keyed by id.
 	"""
 	wrappers = []
 	messages = {}
+	container = appModule.TeamsMessageList()
+	container.IA2Attributes = {"id": "chat-pane-list"}
 	for entry in shape:
 		wrapper = _Ia2Object(role=_Role.GROUPING)
+		wrapper.parent = container
 		if entry is not None:
 			message = appModule.TeamsMessage()
 			message.IA2Attributes = {"id": entry}
@@ -206,7 +209,9 @@ def _buildHistory(shape):
 	for index, wrapper in enumerate(wrappers):
 		wrapper.previous = wrappers[index - 1] if index else None
 		wrapper.next = wrappers[index + 1] if index + 1 < len(wrappers) else None
-	return messages
+	container.firstChild = wrappers[0] if wrappers else None
+	container.lastChild = wrappers[-1] if wrappers else None
+	return container, messages
 
 
 class _TeamsAppModuleFixture(unittest.TestCase):
@@ -400,11 +405,17 @@ class MessageDetectionTests(unittest.TestCase):
 			appModule._isMessageObject(_Ia2Object("message-body-1234", role=_Role.LISTITEM)),
 		)
 
+	def testContainerIsRecognisedByItsId(self):
+		self.assertTrue(appModule._isMessageListObject(_Ia2Object("chat-pane-list")))
+		self.assertFalse(appModule._isMessageListObject(_Ia2Object("menur1ri")))
+		self.assertFalse(appModule._isMessageListObject(_Ia2Object()))
+
 	def testOverlayChoiceFollowsDetection(self):
 		instance = appModule.AppModule()
 		try:
 			for obj, expected in (
 				(_Ia2Object("message-body-1"), appModule.TeamsMessage),
+				(_Ia2Object("chat-pane-list"), appModule.TeamsMessageList),
 				(_Ia2Object("something-else"), appModule.TeamsMessageHelpFilterOverlay),
 			):
 				clsList = []
@@ -429,7 +440,7 @@ class MultilineFlowTests(unittest.TestCase):
 		self.assertIs(appModule.TeamsMessage.TextInfo, _NVDAObjectTextInfo)
 
 	def testWalksForwardAndBack(self):
-		messages = _buildHistory(["message-body-1", "message-body-2", "message-body-3"])
+		_, messages = _buildHistory(["message-body-1", "message-body-2", "message-body-3"])
 		first, second, third = (messages[f"message-body-{n}"] for n in (1, 2, 3))
 		self.assertIs(first.brlMultilineFlowNext(), second)
 		self.assertIs(second.brlMultilineFlowNext(), third)
@@ -437,12 +448,12 @@ class MultilineFlowTests(unittest.TestCase):
 		self.assertIs(second.brlMultilineFlowPrevious(), first)
 
 	def testTerminatesWithoutWrappingAround(self):
-		messages = _buildHistory(["message-body-1", "message-body-2"])
+		_, messages = _buildHistory(["message-body-1", "message-body-2"])
 		self.assertIsNone(messages["message-body-1"].brlMultilineFlowPrevious())
 		self.assertIsNone(messages["message-body-2"].brlMultilineFlowNext())
 
 	def testSkipsWrappersHoldingNoMessage(self):
-		messages = _buildHistory(["message-body-1", None, None, "message-body-2"])
+		_, messages = _buildHistory(["message-body-1", None, None, "message-body-2"])
 		first, second = messages["message-body-1"], messages["message-body-2"]
 		self.assertIs(first.brlMultilineFlowNext(), second)
 		self.assertIs(second.brlMultilineFlowPrevious(), first)
@@ -450,11 +461,11 @@ class MultilineFlowTests(unittest.TestCase):
 	def testDoesNotScanTheWholeHistoryForOneStep(self):
 		# A long stretch of message-less wrappers must end the run rather than
 		# turn a single pan into a walk of the loaded history.
-		messages = _buildHistory(["message-body-1"] + [None] * 200 + ["message-body-2"])
+		_, messages = _buildHistory(["message-body-1"] + [None] * 200 + ["message-body-2"])
 		self.assertIsNone(messages["message-body-1"].brlMultilineFlowNext())
 
 	def testFindsAMessageNestedInsideItsWrapper(self):
-		messages = _buildHistory(["message-body-1", "message-body-2"])
+		_, messages = _buildHistory(["message-body-1", "message-body-2"])
 		second = messages["message-body-2"]
 		wrapper = second.parent
 		# Push the message one level deeper, behind an unnamed element.
@@ -463,6 +474,36 @@ class MultilineFlowTests(unittest.TestCase):
 		second.parent = inner
 		inner.parent = wrapper
 		self.assertIs(messages["message-body-1"].brlMultilineFlowNext(), second)
+
+
+class PinnedRunTests(unittest.TestCase):
+	def testContainerIsDeclared(self):
+		self.assertTrue(appModule.TeamsMessageList.brlMultilineFlowRunContainer)
+
+	def testAPinStartsAtTheNewestMessage(self):
+		# A chat wants the newest under the fingers. BrlMultiline's own fallback
+		# would find the first member, which is right for a list and wrong here.
+		container, messages = _buildHistory(["message-body-1", "message-body-2", "message-body-3"])
+		self.assertIs(container.brlMultilineFlowRunStart(), messages["message-body-3"])
+
+	def testStartSkipsTrailingWrappersHoldingNoMessage(self):
+		container, messages = _buildHistory(["message-body-1", "message-body-2", None, None])
+		self.assertIs(container.brlMultilineFlowRunStart(), messages["message-body-2"])
+
+	def testStartWalksBackIntoTheRunFromTheEnd(self):
+		container, messages = _buildHistory(["message-body-1", "message-body-2"])
+		start = container.brlMultilineFlowRunStart()
+		self.assertIs(start, messages["message-body-2"])
+		self.assertIs(start.brlMultilineFlowPrevious(), messages["message-body-1"])
+		self.assertIsNone(start.brlMultilineFlowNext())
+
+	def testEmptyHistoryHasNoStart(self):
+		container, _ = _buildHistory([])
+		self.assertIsNone(container.brlMultilineFlowRunStart())
+
+	def testStartDoesNotScanTheWholeHistory(self):
+		container, _ = _buildHistory(["message-body-1"] + [None] * 200)
+		self.assertIsNone(container.brlMultilineFlowRunStart())
 
 
 if __name__ == "__main__":

@@ -10,6 +10,9 @@
   blank. Chromium exposes IAccessibleText on the message element, but its own
   text is a single space, because the content sits in child nodes and the name
   comes from a related element.
+- The chat history container declares a flow run for the BrlMultiline add-on and
+  supplies the newest message as the starting point, so the history can be
+  pinned to a display or segment while focus is elsewhere.
 - Chat messages declare a flow run for the BrlMultiline add-on, so a multi-row
   braille display can show a run of messages at once. Nothing is imported from
   BrlMultiline and the add-on behaves identically without it.
