@@ -384,6 +384,8 @@ class AppModule(appModuleHandler.AppModule):
 		self._traceEvents = False
 		self._originalBrailleMessage = None
 		self._brailleMessageFilter = None
+		self._lastMessageList = None
+		self._flowProbeMessage = None
 		if filter_speechSequence is not None:
 			filter_speechSequence.register(self._filterSpeechSequence)
 			self._speechFilterRegistered = True
@@ -635,6 +637,123 @@ class AppModule(appModuleHandler.AppModule):
 
 	def _shouldFilterBrailleMessage(self) -> bool:
 		return not self._presentingRetrievedMessage and self._isThisTeamsInstanceFocused()
+
+	@staticmethod
+	def _describeMessageBriefly(obj) -> str:
+		if obj is None:
+			return "None"
+		name = getattr(obj, "name", None)
+		if isinstance(name, str) and len(name) > 60:
+			name = name[:60] + "..."
+		return f"{_getElementId(obj)!r} {name!r}"
+
+	def _findMessageList(self):
+		"""Locate the chat history container, remembering the last one found.
+
+		The probe is meant to be run while focus is elsewhere, which is the case
+		that matters for a pinned monitor, so a container found earlier is reused
+		when the current focus is not inside one.
+		"""
+		try:
+			ancestor = api.getFocusObject()
+			for _ in range(8):
+				if ancestor is None:
+					break
+				if _isMessageListObject(ancestor):
+					self._lastMessageList = ancestor
+					return ancestor
+				ancestor = ancestor.parent
+		except Exception:
+			log.debugWarning("Could not climb to the Teams chat history", exc_info=True)
+		return self._lastMessageList
+
+	def _describeFlowTail(self, container) -> list[str]:
+		"""Report the last few wrappers, so a new message can be seen arriving."""
+		lines = []
+		try:
+			wrapper = container.lastChild
+			for index in range(5):
+				if wrapper is None:
+					break
+				message = _findMessageWithin(wrapper, _FLOW_DESCENT_DEPTH)
+				lines.append(
+					f"tail -{index}: wrapper={_getElementId(wrapper)!r}"
+					f" role={getattr(wrapper, 'role', None)!r}"
+					f" message={self._describeMessageBriefly(message)}",
+				)
+				wrapper = wrapper.previous
+		except Exception:
+			log.debugWarning("Could not describe the Teams history tail", exc_info=True)
+		return lines
+
+	def _probeRetainedMessage(self) -> list[str]:
+		"""Ask the message held since the last press what comes after it.
+
+		This is the question a pinned monitor asks. If this object can still see a
+		newly arrived message, the walk is live and anything stuck is on the
+		monitor's side. If it cannot, its underlying node went stale when Teams
+		re-rendered, and the walk is the problem.
+		"""
+		retained = self._flowProbeMessage
+		if retained is None:
+			return ["retained: none held yet, press again after a new message arrives"]
+		lines = [f"retained: {self._describeMessageBriefly(retained)}"]
+		try:
+			parent = retained.parent
+			parentId = _getElementId(parent) if parent is not None else None
+			parentHasNext = (parent.next is not None) if parent is not None else None
+			lines.append(f"retained parent={parentId!r} parentNext={parentHasNext!r}")
+		except Exception as error:
+			lines.append(f"retained parent raised {type(error).__name__}: {error}")
+		try:
+			lines.append(f"retained next: {self._describeMessageBriefly(retained.brlMultilineFlowNext())}")
+		except Exception as error:
+			lines.append(f"retained next raised {type(error).__name__}: {error}")
+		return lines
+
+	def _walkFlowRun(self, start, forward: bool, limit: int = 5) -> list[str]:
+		lines = []
+		label = "forward" if forward else "back"
+		current = start
+		for index in range(limit):
+			try:
+				current = current.brlMultilineFlowNext() if forward else current.brlMultilineFlowPrevious()
+			except Exception as error:
+				lines.append(f"{label} step raised {type(error).__name__}: {error}")
+				break
+			if current is None:
+				lines.append(f"{label} {index}: end of run")
+				break
+			lines.append(f"{label} {index}: {self._describeMessageBriefly(current)}")
+		return lines
+
+	@scriptHandler.script(
+		description="Logs the Microsoft Teams chat flow run for multi-line braille",
+		category="Microsoft Teams",
+		gestures=["kb:NVDA+control+shift+f"],
+	)
+	def script_logFlowRun(self, gesture):
+		lines = ["Teams flow run diagnostic"]
+		container = self._findMessageList()
+		if container is None:
+			log.info("Teams flow run diagnostic: no chat history container found")
+			ui.message("No Teams chat history found, focus it once first")
+			return
+		try:
+			childCount = container.childCount
+		except Exception:
+			childCount = "?"
+		lines.append(f"container={_getElementId(container)!r} childCount={childCount}")
+		lines.extend(self._probeRetainedMessage())
+		lines.extend(self._describeFlowTail(container))
+		start = container.brlMultilineFlowRunStart()
+		lines.append(f"start: {self._describeMessageBriefly(start)}")
+		if start is not None:
+			lines.extend(self._walkFlowRun(start, forward=True))
+			lines.extend(self._walkFlowRun(start, forward=False))
+		self._flowProbeMessage = start
+		log.info(chr(10).join(lines))
+		ui.message("Teams flow run written to the log")
 
 	def _describeMessageStructure(self, obj) -> list[str]:
 		"""Diagnostic: report what identifies an object and how it is nested.

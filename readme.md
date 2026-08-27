@@ -93,6 +93,12 @@ Two commands help identify where unwanted output originates.
   reaching the app module and every braille flash message is written to the
   NVDA log with its text and call site, including messages the add-on
   suppresses.
+- NVDA+Control+Shift+F logs the chat flow run: the container, the last few
+  wrappers at the end of the history, a walk forward and back from the newest
+  message, and what the message held since the previous press now reports as
+  its next. That last part is the question a pinned monitor asks, so pressing it
+  once, waiting for a new message, then pressing it again shows whether a
+  retained message object can still see what arrived after it.
 - NVDA+Control+Shift+D logs the current braille state: which buffer is active,
   the regions it holds, and the properties of the focused object.
 
