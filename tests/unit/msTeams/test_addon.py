@@ -416,18 +416,6 @@ class MultilineFlowTests(unittest.TestCase):
 	def testRunIsDeclared(self):
 		self.assertTrue(appModule.TeamsMessage.brlMultilineFlowRun)
 
-	def testEditableStateIsNotInheritedFromTheListItemRole(self):
-		# IAccessible keeps EDITABLE beside READONLY for LIST and LISTITEM. That
-		# would flip _hasNavigableText and change how the object is presented.
-		message = appModule.TeamsMessage()
-		message.baseStates = {_State.READONLY, _State.EDITABLE}
-		self.assertEqual(message._get_states(), {_State.READONLY})
-
-	def testOtherStatesSurvive(self):
-		message = appModule.TeamsMessage()
-		message.baseStates = {_State.READONLY}
-		self.assertEqual(message._get_states(), {_State.READONLY})
-
 	def testWalksForwardAndBack(self):
 		messages = _buildHistory(["message-body-1", "message-body-2", "message-body-3"])
 		first, second, third = (messages[f"message-body-{n}"] for n in (1, 2, 3))

@@ -271,21 +271,6 @@ class TeamsMessage(TeamsMessageHelpFilterOverlay):
 	#: the rows of a multi-line braille display.
 	brlMultilineFlowRun = True
 
-	def _get_states(self):
-		"""Undo a side effect of claiming the LISTITEM role.
-
-		``IAccessible._get_states`` discards EDITABLE when READONLY is present,
-		but deliberately skips that for LIST and LISTITEM, where Firefox uses the
-		combination to mark an interactive list. A Teams message is not editable,
-		and leaving EDITABLE in place flips ``_hasNavigableText``, which makes
-		``getObjectSpeech`` report the object's text content instead of its
-		properties and suppresses the value in ``NVDAObjectRegion``. The role is
-		wanted for presentation only, so the state is put back as it was.
-		"""
-		states = super()._get_states()
-		states.discard(controlTypes.State.EDITABLE)
-		return states
-
 	def _flowStep(self, forward: bool):
 		"""Walk one message along the history.
 
@@ -596,7 +581,7 @@ class AppModule(appModuleHandler.AppModule):
 				f" elementId={_getElementId(obj)!r}"
 				f" states={getattr(obj, 'states', None)!r}"
 				f" hasNavigableText={getattr(obj, '_hasNavigableText', None)!r}"
-				f" TextInfo={getattr(type(obj), 'TextInfo', None)!r}",
+				f" TextInfo={getattr(obj, 'TextInfo', None)!r}",
 			)
 			lines.append(f"IA2Attributes={getattr(obj, 'IA2Attributes', None)!r}")
 			ancestor = obj
@@ -616,6 +601,38 @@ class AppModule(appModuleHandler.AppModule):
 				)
 		except Exception:
 			log.debugWarning("Could not describe the Teams message structure", exc_info=True)
+		return lines
+
+	def _describeCurrentLine(self, obj) -> list[str]:
+		"""Diagnostic: replay what NVDA's report current line command does.
+
+		``globalCommands.script_reportCurrentLine`` asks for a caret position and
+		falls back to the first position, but it only catches NotImplementedError
+		and RuntimeError. Anything else propagates and the command fails, so the
+		exception type is what matters here, not just that something went wrong.
+		"""
+		# Imported here so the unit tests do not have to stub it.
+		import textInfos
+
+		lines = []
+		try:
+			treeInterceptor = obj.treeInterceptor
+			lines.append(
+				f"treeInterceptor={treeInterceptor!r}"
+				f" passThrough={getattr(treeInterceptor, 'passThrough', None)!r}",
+			)
+			try:
+				info = obj.makeTextInfo(textInfos.POSITION_CARET)
+				origin = "caret"
+			except Exception as error:
+				lines.append(f"POSITION_CARET raised {type(error).__name__}: {error}")
+				info = obj.makeTextInfo(textInfos.POSITION_FIRST)
+				origin = "first"
+			info.expand(textInfos.UNIT_LINE)
+			lines.append(f"current line via {origin}: {info.text!r}")
+		except Exception as error:
+			lines.append(f"report current line would fail with {type(error).__name__}: {error}")
+			log.debugWarning("Could not replay report current line", exc_info=True)
 		return lines
 
 	def _logBrailleMessage(self, text) -> None:
@@ -710,6 +727,7 @@ class AppModule(appModuleHandler.AppModule):
 		focus = api.getFocusObject()
 		lines.append(f"focus: {self._describeObject(focus)}")
 		lines.extend(self._describeMessageStructure(focus))
+		lines.extend(self._describeCurrentLine(focus))
 		log.info("\n".join(lines))
 		ui.message(
 			"Braille diagnostic written to the log, " + ("flash message" if isMessage else "focus region"),
