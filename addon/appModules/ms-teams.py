@@ -20,6 +20,7 @@ import unicodedata
 import api
 import appModuleHandler
 import braille
+import controlTypes
 from logHandler import log
 from NVDAObjects import NVDAObject
 import scriptHandler
@@ -76,6 +77,17 @@ _SUPPRESSED_ANNOUNCEMENT_PATTERNS = (
 
 _PUNCTUATION_NOTIFICATION_GRACE_SECONDS = 0.75
 _MESSAGE_AUTOMATION_ID_PREFIX = "message-body-"
+
+#: IAccessible2 object attributes that may carry the DOM id. Teams is exposed
+#: through IAccessible2, not UIA, so the automation id used by the recent-message
+#: command is read here from the IA2 attributes instead.
+_ELEMENT_ID_ATTRIBUTES = ("id", "html-id")
+
+#: Bounds for the flow walk. Each step happens while a reader pans a braille
+#: display, so it must not scan the history to answer one step.
+_FLOW_SIBLING_LIMIT = 12
+_FLOW_DESCENT_DEPTH = 3
+_FLOW_CHILD_LIMIT = 20
 _RECENT_MESSAGE_GESTURES = tuple(f"kb:control+shift+{number}" for number in range(1, 10))
 
 #: Object properties that NVDA renders into a braille region, and that Teams
@@ -148,6 +160,65 @@ def _containsNavigationHelp(text: object) -> bool:
 	return _mightContainNavigationHelp(text) and _NAVIGATION_HELP_RE.search(text) is not None
 
 
+def _getElementId(obj) -> str:
+	"""Return the DOM id of an IAccessible2 object, or an empty string."""
+	try:
+		attributes = obj.IA2Attributes
+	except Exception:
+		return ""
+	if not attributes:
+		return ""
+	for key in _ELEMENT_ID_ATTRIBUTES:
+		value = attributes.get(key)
+		if isinstance(value, str) and value:
+			return value
+	return ""
+
+
+def _isMessageObject(obj) -> bool:
+	"""Is this one of the message bodies in the chat history?
+
+	The role is checked first so that the IA2 attributes, which cost a COM call,
+	are only fetched for the objects that could possibly match.
+	"""
+	try:
+		if obj.role != controlTypes.Role.GROUPING:
+			return False
+	except Exception:
+		return False
+	return _getElementId(obj).startswith(_MESSAGE_AUTOMATION_ID_PREFIX)
+
+
+def _findMessageWithin(obj, depth: int):
+	"""Find the message inside a history wrapper, or None.
+
+	Wrappers also hold timestamps, unnamed elements, and the emoji pop-over menu
+	Teams inserts beside a focused message, so the first message found wins and
+	everything else is skipped.
+	"""
+	if obj is None:
+		return None
+	if isinstance(obj, TeamsMessage):
+		return obj
+	if depth <= 0:
+		return None
+	try:
+		child = obj.firstChild
+	except Exception:
+		return None
+	for _ in range(_FLOW_CHILD_LIMIT):
+		if child is None:
+			return None
+		found = _findMessageWithin(child, depth - 1)
+		if found is not None:
+			return found
+		try:
+			child = child.next
+		except Exception:
+			return None
+	return None
+
+
 class TeamsMessageHelpFilterOverlay(NVDAObject):
 	"""Strip the Teams navigation help from the properties NVDA presents.
 
@@ -177,6 +248,63 @@ class TeamsMessageHelpFilterOverlay(NVDAObject):
 
 	def _get_errorMessage(self):
 		return filterNavigationHelp(super()._get_errorMessage())
+
+
+class TeamsMessage(TeamsMessageHelpFilterOverlay):
+	"""A single message in the chat history.
+
+	Teams gives its messages a role of GROUPING. They already arrow like a list
+	and take focus, but nothing tells NVDA they are list items, so every message
+	is prefixed with a role on braille and announced as "grouping" in speech.
+	LISTITEM is in ``controlTypes.silentRolesOnFocus``, which both
+	``speech.speakObject`` and ``getPropertiesBraille`` honour by dropping the
+	role text for a named object, so the correct role also removes that noise.
+
+	The ``brlMultilineFlow`` members below are inert unless the BrlMultiline
+	add-on is running. Nothing in NVDA reads them, this module imports nothing
+	from that add-on, and none of it moves focus or touches Teams' own state.
+	"""
+
+	role = controlTypes.Role.LISTITEM
+
+	#: Declares that this object belongs to a run BrlMultiline may flow across
+	#: the rows of a multi-line braille display.
+	brlMultilineFlowRun = True
+
+	def _flowStep(self, forward: bool):
+		"""Walk one message along the history.
+
+		The messages are not siblings of each other. Each sits inside a wrapper,
+		so a step means: climb to the wrapper, move to its next or previous
+		sibling, then descend to the message it holds. Wrappers without a
+		message are skipped, within a bound, so a gap does not end the run and a
+		long stretch of them cannot turn one pan into a scan of the history.
+		"""
+		try:
+			wrapper = self.parent
+		except Exception:
+			log.debugWarning("Could not reach the Teams message wrapper", exc_info=True)
+			return None
+		for _ in range(_FLOW_SIBLING_LIMIT):
+			if wrapper is None:
+				return None
+			try:
+				wrapper = wrapper.next if forward else wrapper.previous
+			except Exception:
+				log.debugWarning("Could not step across Teams message wrappers", exc_info=True)
+				return None
+			message = _findMessageWithin(wrapper, _FLOW_DESCENT_DEPTH)
+			if message is not None and message != self:
+				return message
+		return None
+
+	def brlMultilineFlowNext(self):
+		"""The next message in the history, or None at the end of what is loaded."""
+		return self._flowStep(forward=True)
+
+	def brlMultilineFlowPrevious(self):
+		"""The previous message, or None at the start of what is loaded."""
+		return self._flowStep(forward=False)
 
 
 class AppModule(appModuleHandler.AppModule):
@@ -290,11 +418,13 @@ class AppModule(appModuleHandler.AppModule):
 		ui.message(messages[-messageNumber])
 
 	def chooseNVDAObjectOverlayClasses(self, obj, clsList):
-		# Applied unconditionally. Teams adds the help text asynchronously, so it
-		# is often absent when the object is first created. Deliberately do not
-		# read obj.name/description/value here either: doing so caches the
-		# unfiltered values for this core cycle before the overlay is in place.
-		clsList.insert(0, TeamsMessageHelpFilterOverlay)
+		# The help filter is applied unconditionally. Teams adds the help text
+		# asynchronously, so it is often absent when the object is first created.
+		# Deliberately do not read obj.name/description/value here either: doing
+		# so caches the unfiltered values for this core cycle before the overlay
+		# is in place. TeamsMessage subclasses the filter, so inserting it alone
+		# is enough, and NVDA drops the redundant base when building the type.
+		clsList.insert(0, TeamsMessage if _isMessageObject(obj) else TeamsMessageHelpFilterOverlay)
 
 	def event_UIA_notification(
 		self,
@@ -434,6 +564,35 @@ class AppModule(appModuleHandler.AppModule):
 	def _shouldFilterBrailleMessage(self) -> bool:
 		return not self._presentingRetrievedMessage and self._isThisTeamsInstanceFocused()
 
+	def _describeMessageStructure(self, obj) -> list[str]:
+		"""Diagnostic: report what identifies an object and how it is nested.
+
+		This is what confirms which IA2 attribute carries the DOM id, and the
+		shape of the wrappers the multi-line flow walks across.
+		"""
+		lines = []
+		try:
+			lines.append(f"isMessage={_isMessageObject(obj)} elementId={_getElementId(obj)!r}")
+			lines.append(f"IA2Attributes={getattr(obj, 'IA2Attributes', None)!r}")
+			ancestor = obj
+			for level in range(4):
+				ancestor = ancestor.parent
+				if ancestor is None:
+					break
+				try:
+					childCount = ancestor.childCount
+				except Exception:
+					childCount = "?"
+				lines.append(
+					f"ancestor {level + 1}: role={getattr(ancestor, 'role', None)!r}"
+					f" elementId={_getElementId(ancestor)!r}"
+					f" childCount={childCount}"
+					f" name={getattr(ancestor, 'name', None)!r}",
+				)
+		except Exception:
+			log.debugWarning("Could not describe the Teams message structure", exc_info=True)
+		return lines
+
 	def _logBrailleMessage(self, text) -> None:
 		"""Diagnostic: log the text and call site of a braille flash message."""
 		try:
@@ -523,7 +682,9 @@ class AppModule(appModuleHandler.AppModule):
 			rawText = getattr(region, "rawText", None)
 			lines.append(f"region {index}: {type(region).__name__} rawText={rawText!r}")
 			lines.append(f"region {index} object: {self._describeObject(getattr(region, 'obj', None))}")
-		lines.append(f"focus: {self._describeObject(api.getFocusObject())}")
+		focus = api.getFocusObject()
+		lines.append(f"focus: {self._describeObject(focus)}")
+		lines.extend(self._describeMessageStructure(focus))
 		log.info("\n".join(lines))
 		ui.message(
 			"Braille diagnostic written to the log, " + ("flash message" if isMessage else "focus region"),

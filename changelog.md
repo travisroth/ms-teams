@@ -2,6 +2,13 @@
 
 ## 1.6.0
 
+- Chat messages are now reported as list items rather than groupings, which
+  also removes the role text from speech and the role abbreviation from braille,
+  because `LISTITEM` is a silent role on focus.
+- Chat messages declare a flow run for the BrlMultiline add-on, so a multi-row
+  braille display can show a run of messages at once. Nothing is imported from
+  BrlMultiline and the add-on behaves identically without it.
+
 - Removed the global plugin entirely. The app module is named `ms-teams.py`
   after the executable, so NVDA loads it without any registration.
 - Removed all monkey patching of `BrailleHandler.update` and of the
