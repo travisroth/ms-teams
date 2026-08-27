@@ -20,8 +20,9 @@ import unicodedata
 import api
 import appModuleHandler
 import braille
+import controlTypes
 from logHandler import log
-from NVDAObjects import NVDAObject
+from NVDAObjects import NVDAObject, NVDAObjectTextInfo
 import scriptHandler
 import ui
 import UIAHandler
@@ -76,6 +77,20 @@ _SUPPRESSED_ANNOUNCEMENT_PATTERNS = (
 
 _PUNCTUATION_NOTIFICATION_GRACE_SECONDS = 0.75
 _MESSAGE_AUTOMATION_ID_PREFIX = "message-body-"
+
+#: DOM id of the element holding every message wrapper in the chat history.
+_MESSAGE_LIST_ELEMENT_ID = "chat-pane-list"
+
+#: IAccessible2 object attributes that may carry the DOM id. Teams is exposed
+#: through IAccessible2, not UIA, so the automation id used by the recent-message
+#: command is read here from the IA2 attributes instead.
+_ELEMENT_ID_ATTRIBUTES = ("id", "html-id")
+
+#: Bounds for the flow walk. Each step happens while a reader pans a braille
+#: display, so it must not scan the history to answer one step.
+_FLOW_SIBLING_LIMIT = 12
+_FLOW_DESCENT_DEPTH = 3
+_FLOW_CHILD_LIMIT = 20
 _RECENT_MESSAGE_GESTURES = tuple(f"kb:control+shift+{number}" for number in range(1, 10))
 
 #: Object properties that NVDA renders into a braille region, and that Teams
@@ -148,6 +163,74 @@ def _containsNavigationHelp(text: object) -> bool:
 	return _mightContainNavigationHelp(text) and _NAVIGATION_HELP_RE.search(text) is not None
 
 
+def _getElementId(obj) -> str:
+	"""Return the DOM id of an IAccessible2 object, or an empty string."""
+	try:
+		attributes = obj.IA2Attributes
+	except Exception:
+		return ""
+	if not attributes:
+		return ""
+	for key in _ELEMENT_ID_ATTRIBUTES:
+		value = attributes.get(key)
+		if isinstance(value, str) and value:
+			return value
+	return ""
+
+
+def _isMessageObject(obj) -> bool:
+	"""Is this one of the message bodies in the chat history?
+
+	The role is checked first so that the IA2 attributes, which cost a COM call,
+	are only fetched for the objects that could possibly match.
+	"""
+	try:
+		if obj.role != controlTypes.Role.GROUPING:
+			return False
+	except Exception:
+		return False
+	return _getElementId(obj).startswith(_MESSAGE_AUTOMATION_ID_PREFIX)
+
+
+def _isMessageListObject(obj) -> bool:
+	"""Is this the container holding the whole chat history?
+
+	Matched on the DOM id alone. The id is specific enough on its own, and not
+	pinning it to a role leaves it working if Teams re-roles the element.
+	"""
+	return _getElementId(obj) == _MESSAGE_LIST_ELEMENT_ID
+
+
+def _findMessageWithin(obj, depth: int):
+	"""Find the message inside a history wrapper, or None.
+
+	Wrappers also hold timestamps, unnamed elements, and the emoji pop-over menu
+	Teams inserts beside a focused message, so the first message found wins and
+	everything else is skipped.
+	"""
+	if obj is None:
+		return None
+	if isinstance(obj, TeamsMessage):
+		return obj
+	if depth <= 0:
+		return None
+	try:
+		child = obj.firstChild
+	except Exception:
+		return None
+	for _ in range(_FLOW_CHILD_LIMIT):
+		if child is None:
+			return None
+		found = _findMessageWithin(child, depth - 1)
+		if found is not None:
+			return found
+		try:
+			child = child.next
+		except Exception:
+			return None
+	return None
+
+
 class TeamsMessageHelpFilterOverlay(NVDAObject):
 	"""Strip the Teams navigation help from the properties NVDA presents.
 
@@ -179,6 +262,117 @@ class TeamsMessageHelpFilterOverlay(NVDAObject):
 		return filterNavigationHelp(super()._get_errorMessage())
 
 
+class TeamsMessage(TeamsMessageHelpFilterOverlay):
+	"""A single message in the chat history.
+
+	Teams gives its messages a role of GROUPING. They already arrow like a list
+	and take focus, but nothing tells NVDA they are list items, so every message
+	is prefixed with a role on braille and announced as "grouping" in speech.
+	LISTITEM is in ``controlTypes.silentRolesOnFocus``, which both
+	``speech.speakObject`` and ``getPropertiesBraille`` honour by dropping the
+	role text for a named object, so the correct role also removes that noise.
+
+	The ``brlMultilineFlow`` members below are inert unless the BrlMultiline
+	add-on is running. Nothing in NVDA reads them, this module imports nothing
+	from that add-on, and none of it moves focus or touches Teams' own state.
+	"""
+
+	role = controlTypes.Role.LISTITEM
+
+	#: Declares that this object belongs to a run BrlMultiline may flow across
+	#: the rows of a multi-line braille display.
+	brlMultilineFlowRun = True
+
+	#: Report the message through its own properties rather than its IAccessible2
+	#: text. Chromium exposes IAccessibleText on the message div, so NVDA picked
+	#: IA2TextTextInfo, but the div's own text is a single space: the message
+	#: content lives in child nodes and the accessible name comes from a related
+	#: element, per the "name-from: related-element" IA2 attribute. That left
+	#: "report current line" reading a blank. NVDAObjectTextInfo exposes
+	#: ``basicText``, which is the name, value and description, so a message reads
+	#: the way a list item in File Explorer does.
+	TextInfo = NVDAObjectTextInfo
+
+	def _flowStep(self, forward: bool):
+		"""Walk one message along the history.
+
+		The messages are not siblings of each other. Each sits inside a wrapper,
+		so a step means: climb to the wrapper, move to its next or previous
+		sibling, then descend to the message it holds. Wrappers without a
+		message are skipped, within a bound, so a gap does not end the run and a
+		long stretch of them cannot turn one pan into a scan of the history.
+		"""
+		try:
+			wrapper = self.parent
+		except Exception:
+			log.debugWarning("Could not reach the Teams message wrapper", exc_info=True)
+			return None
+		for _ in range(_FLOW_SIBLING_LIMIT):
+			if wrapper is None:
+				return None
+			try:
+				wrapper = wrapper.next if forward else wrapper.previous
+			except Exception:
+				log.debugWarning("Could not step across Teams message wrappers", exc_info=True)
+				return None
+			message = _findMessageWithin(wrapper, _FLOW_DESCENT_DEPTH)
+			if message is not None and message != self:
+				return message
+		return None
+
+	def brlMultilineFlowNext(self):
+		"""The next message in the history, or None at the end of what is loaded."""
+		return self._flowStep(forward=True)
+
+	def brlMultilineFlowPrevious(self):
+		"""The previous message, or None at the start of what is loaded."""
+		return self._flowStep(forward=False)
+
+
+class TeamsMessageList(TeamsMessageHelpFilterOverlay):
+	"""The container holding the whole chat history.
+
+	Declared so BrlMultiline can pin the chat history to a display or segment and
+	keep it under the fingers while focus is elsewhere. Like the members, these
+	attributes are inert unless that add-on is running.
+	"""
+
+	#: Declares that this container holds a run whose members declare
+	#: ``brlMultilineFlowRun``.
+	brlMultilineFlowRunContainer = True
+
+	def brlMultilineFlowRunStart(self):
+		"""The message to begin at when the run is pinned: the newest.
+
+		Without this, BrlMultiline searches the container and finds the first
+		member, which is right for a list and wrong for a chat history, where the
+		newest message is the one worth having under the fingers. A reader already
+		on a message always wins over this, so it only decides where a pin made
+		from elsewhere starts.
+
+		Walking back from the last child is far cheaper than the UIA query behind
+		the recent-message command, which enumerates every descendant group, and
+		it yields the object rather than its text.
+		"""
+		try:
+			wrapper = self.lastChild
+		except Exception:
+			log.debugWarning("Could not reach the end of the Teams chat history", exc_info=True)
+			return None
+		for _ in range(_FLOW_SIBLING_LIMIT):
+			if wrapper is None:
+				return None
+			message = _findMessageWithin(wrapper, _FLOW_DESCENT_DEPTH)
+			if message is not None:
+				return message
+			try:
+				wrapper = wrapper.previous
+			except Exception:
+				log.debugWarning("Could not step back through Teams message wrappers", exc_info=True)
+				return None
+		return None
+
+
 class AppModule(appModuleHandler.AppModule):
 	"""NVDA support for ``ms-teams.exe`` (New Microsoft Teams)."""
 
@@ -190,6 +384,8 @@ class AppModule(appModuleHandler.AppModule):
 		self._traceEvents = False
 		self._originalBrailleMessage = None
 		self._brailleMessageFilter = None
+		self._lastMessageList = None
+		self._flowProbeMessage = None
 		if filter_speechSequence is not None:
 			filter_speechSequence.register(self._filterSpeechSequence)
 			self._speechFilterRegistered = True
@@ -290,11 +486,19 @@ class AppModule(appModuleHandler.AppModule):
 		ui.message(messages[-messageNumber])
 
 	def chooseNVDAObjectOverlayClasses(self, obj, clsList):
-		# Applied unconditionally. Teams adds the help text asynchronously, so it
-		# is often absent when the object is first created. Deliberately do not
-		# read obj.name/description/value here either: doing so caches the
-		# unfiltered values for this core cycle before the overlay is in place.
-		clsList.insert(0, TeamsMessageHelpFilterOverlay)
+		# The help filter is applied unconditionally. Teams adds the help text
+		# asynchronously, so it is often absent when the object is first created.
+		# Deliberately do not read obj.name/description/value here either: doing
+		# so caches the unfiltered values for this core cycle before the overlay
+		# is in place. TeamsMessage subclasses the filter, so inserting it alone
+		# is enough, and NVDA drops the redundant base when building the type.
+		if _isMessageObject(obj):
+			overlay = TeamsMessage
+		elif _isMessageListObject(obj):
+			overlay = TeamsMessageList
+		else:
+			overlay = TeamsMessageHelpFilterOverlay
+		clsList.insert(0, overlay)
 
 	def event_UIA_notification(
 		self,
@@ -434,6 +638,196 @@ class AppModule(appModuleHandler.AppModule):
 	def _shouldFilterBrailleMessage(self) -> bool:
 		return not self._presentingRetrievedMessage and self._isThisTeamsInstanceFocused()
 
+	@staticmethod
+	def _describeMessageBriefly(obj) -> str:
+		if obj is None:
+			return "None"
+		name = getattr(obj, "name", None)
+		if isinstance(name, str) and len(name) > 60:
+			name = name[:60] + "..."
+		return f"{_getElementId(obj)!r} {name!r}"
+
+	def _findMessageList(self):
+		"""Locate the chat history container, remembering the last one found.
+
+		The probe is meant to be run while focus is elsewhere, which is the case
+		that matters for a pinned monitor, so a container found earlier is reused
+		when the current focus is not inside one.
+		"""
+		try:
+			ancestor = api.getFocusObject()
+			for _ in range(8):
+				if ancestor is None:
+					break
+				if _isMessageListObject(ancestor):
+					self._lastMessageList = ancestor
+					return ancestor
+				ancestor = ancestor.parent
+		except Exception:
+			log.debugWarning("Could not climb to the Teams chat history", exc_info=True)
+		return self._lastMessageList
+
+	def _describeFlowTail(self, container) -> list[str]:
+		"""Report the last few wrappers, so a new message can be seen arriving."""
+		lines = []
+		try:
+			wrapper = container.lastChild
+			for index in range(5):
+				if wrapper is None:
+					break
+				message = _findMessageWithin(wrapper, _FLOW_DESCENT_DEPTH)
+				lines.append(
+					f"tail -{index}: wrapper={_getElementId(wrapper)!r}"
+					f" role={getattr(wrapper, 'role', None)!r}"
+					f" message={self._describeMessageBriefly(message)}",
+				)
+				wrapper = wrapper.previous
+		except Exception:
+			log.debugWarning("Could not describe the Teams history tail", exc_info=True)
+		return lines
+
+	def _probeRetainedMessage(self) -> list[str]:
+		"""Ask the message held since the last press what comes after it.
+
+		This is the question a pinned monitor asks. If this object can still see a
+		newly arrived message, the walk is live and anything stuck is on the
+		monitor's side. If it cannot, its underlying node went stale when Teams
+		re-rendered, and the walk is the problem.
+		"""
+		retained = self._flowProbeMessage
+		if retained is None:
+			return ["retained: none held yet, press again after a new message arrives"]
+		lines = [f"retained: {self._describeMessageBriefly(retained)}"]
+		try:
+			parent = retained.parent
+			parentId = _getElementId(parent) if parent is not None else None
+			parentHasNext = (parent.next is not None) if parent is not None else None
+			lines.append(f"retained parent={parentId!r} parentNext={parentHasNext!r}")
+		except Exception as error:
+			lines.append(f"retained parent raised {type(error).__name__}: {error}")
+		try:
+			lines.append(f"retained next: {self._describeMessageBriefly(retained.brlMultilineFlowNext())}")
+		except Exception as error:
+			lines.append(f"retained next raised {type(error).__name__}: {error}")
+		return lines
+
+	def _walkFlowRun(self, start, forward: bool, limit: int = 5) -> list[str]:
+		lines = []
+		label = "forward" if forward else "back"
+		current = start
+		for index in range(limit):
+			try:
+				current = current.brlMultilineFlowNext() if forward else current.brlMultilineFlowPrevious()
+			except Exception as error:
+				lines.append(f"{label} step raised {type(error).__name__}: {error}")
+				break
+			if current is None:
+				lines.append(f"{label} {index}: end of run")
+				break
+			lines.append(f"{label} {index}: {self._describeMessageBriefly(current)}")
+		return lines
+
+	@scriptHandler.script(
+		description="Logs the Microsoft Teams chat flow run for multi-line braille",
+		category="Microsoft Teams",
+		gestures=["kb:NVDA+control+shift+f"],
+	)
+	def script_logFlowRun(self, gesture):
+		lines = ["Teams flow run diagnostic"]
+		container = self._findMessageList()
+		if container is None:
+			log.info("Teams flow run diagnostic: no chat history container found")
+			ui.message("No Teams chat history found, focus it once first")
+			return
+		try:
+			childCount = container.childCount
+		except Exception:
+			childCount = "?"
+		lines.append(f"container={_getElementId(container)!r} childCount={childCount}")
+		lines.extend(self._probeRetainedMessage())
+		lines.extend(self._describeFlowTail(container))
+		start = container.brlMultilineFlowRunStart()
+		lines.append(f"start: {self._describeMessageBriefly(start)}")
+		if start is not None:
+			lines.extend(self._walkFlowRun(start, forward=True))
+			lines.extend(self._walkFlowRun(start, forward=False))
+		self._flowProbeMessage = start
+		log.info(chr(10).join(lines))
+		ui.message("Teams flow run written to the log")
+
+	def _describeMessageStructure(self, obj) -> list[str]:
+		"""Diagnostic: report what identifies an object and how it is nested.
+
+		This is what confirms which IA2 attribute carries the DOM id, and the
+		shape of the wrappers the multi-line flow walks across.
+		"""
+		lines = []
+		try:
+			# Report the applied class, not _isMessageObject. That helper checks
+			# for the GROUPING role Teams supplies, which TeamsMessage has already
+			# replaced by the time anything can be inspected, so calling it here
+			# would always say False on a message.
+			lines.append(
+				f"isMessage={isinstance(obj, TeamsMessage)}"
+				f" elementId={_getElementId(obj)!r}"
+				f" states={getattr(obj, 'states', None)!r}"
+				f" hasNavigableText={getattr(obj, '_hasNavigableText', None)!r}"
+				f" TextInfo={getattr(obj, 'TextInfo', None)!r}",
+			)
+			lines.append(f"IA2Attributes={getattr(obj, 'IA2Attributes', None)!r}")
+			ancestor = obj
+			for level in range(4):
+				ancestor = ancestor.parent
+				if ancestor is None:
+					break
+				try:
+					childCount = ancestor.childCount
+				except Exception:
+					childCount = "?"
+				lines.append(
+					f"ancestor {level + 1}: role={getattr(ancestor, 'role', None)!r}"
+					f" elementId={_getElementId(ancestor)!r}"
+					f" childCount={childCount}"
+					f" name={getattr(ancestor, 'name', None)!r}",
+				)
+		except Exception:
+			log.debugWarning("Could not describe the Teams message structure", exc_info=True)
+		return lines
+
+	def _describeCurrentLine(self, obj) -> list[str]:
+		"""Diagnostic: replay what NVDA's report current line command does.
+
+		``globalCommands.script_reportCurrentLine`` asks for a caret position and
+		falls back to the first position, but it only catches NotImplementedError
+		and RuntimeError. Anything else propagates and the command fails, so the
+		exception type is what matters here, not just that something went wrong.
+		"""
+		# Imported here so the unit tests do not have to stub it.
+		import textInfos
+
+		lines = []
+		try:
+			treeInterceptor = obj.treeInterceptor
+			lines.append(
+				f"treeInterceptor={treeInterceptor!r}"
+				f" passThrough={getattr(treeInterceptor, 'passThrough', None)!r}",
+			)
+			try:
+				info = obj.makeTextInfo(textInfos.POSITION_CARET)
+				origin = "caret"
+			except Exception as error:
+				lines.append(f"POSITION_CARET raised {type(error).__name__}: {error}")
+				info = obj.makeTextInfo(textInfos.POSITION_FIRST)
+				origin = "first"
+			info.expand(textInfos.UNIT_LINE)
+			lines.append(f"current line via {origin}: {info.text!r}")
+			story = obj.makeTextInfo(textInfos.POSITION_ALL)
+			lines.append(f"whole story: len={len(story.text)} {story.text!r}")
+		except Exception as error:
+			lines.append(f"report current line would fail with {type(error).__name__}: {error}")
+			log.debugWarning("Could not replay report current line", exc_info=True)
+		return lines
+
 	def _logBrailleMessage(self, text) -> None:
 		"""Diagnostic: log the text and call site of a braille flash message."""
 		try:
@@ -523,7 +917,10 @@ class AppModule(appModuleHandler.AppModule):
 			rawText = getattr(region, "rawText", None)
 			lines.append(f"region {index}: {type(region).__name__} rawText={rawText!r}")
 			lines.append(f"region {index} object: {self._describeObject(getattr(region, 'obj', None))}")
-		lines.append(f"focus: {self._describeObject(api.getFocusObject())}")
+		focus = api.getFocusObject()
+		lines.append(f"focus: {self._describeObject(focus)}")
+		lines.extend(self._describeMessageStructure(focus))
+		lines.extend(self._describeCurrentLine(focus))
 		log.info("\n".join(lines))
 		ui.message(
 			"Braille diagnostic written to the log, " + ("flash message" if isMessage else "focus region"),

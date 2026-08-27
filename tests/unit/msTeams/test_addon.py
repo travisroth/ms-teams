@@ -14,12 +14,28 @@ import types
 import unittest
 
 
+class _Role:
+	"""Only the two roles this module compares against."""
+
+	GROUPING = 1
+	LISTITEM = 2
+
+
+class _State:
+	EDITABLE = "editable"
+	READONLY = "readonly"
+
+
 class _AppModuleBase:
 	def __init__(self, *args, **kwargs):
 		pass
 
 	def terminate(self):
 		pass
+
+
+class _NVDAObjectTextInfo:
+	"""Stand-in for NVDA's default TextInfo, which exposes basicText."""
 
 
 class _NVDAObjectBase:
@@ -44,6 +60,9 @@ class _NVDAObjectBase:
 
 	def _get_errorMessage(self):
 		return ""
+
+	def _get_states(self):
+		return set(getattr(self, "baseStates", ()))
 
 
 class _BrailleHandler:
@@ -117,13 +136,17 @@ stubs = {
 	),
 	"appModuleHandler": types.SimpleNamespace(AppModule=_AppModuleBase),
 	"braille": types.SimpleNamespace(handler=brailleHandler),
+	"controlTypes": types.SimpleNamespace(Role=_Role, State=_State),
 	"logHandler": types.SimpleNamespace(
 		log=types.SimpleNamespace(
 			debugWarning=lambda *args, **kwargs: None,
 			info=lambda *args, **kwargs: None,
 		),
 	),
-	"NVDAObjects": types.SimpleNamespace(NVDAObject=_NVDAObjectBase),
+	"NVDAObjects": types.SimpleNamespace(
+		NVDAObject=_NVDAObjectBase,
+		NVDAObjectTextInfo=_NVDAObjectTextInfo,
+	),
 	"scriptHandler": types.SimpleNamespace(script=_scriptDecorator),
 	"UIAHandler": types.SimpleNamespace(
 		handler=types.SimpleNamespace(clientObject=uiaClient, baseCacheRequest=object()),
@@ -146,6 +169,49 @@ appModuleSpec = importlib.util.spec_from_file_location("msTeamsTestAppModule", a
 appModule = importlib.util.module_from_spec(appModuleSpec)
 assert appModuleSpec.loader is not None
 appModuleSpec.loader.exec_module(appModule)
+
+
+class _Ia2Object:
+	"""A stand-in for a non-message node in the history tree."""
+
+	def __init__(self, elementId="", role=_Role.GROUPING, firstChild=None):
+		self.IA2Attributes = {"id": elementId} if elementId else {}
+		self.role = role
+		self.firstChild = firstChild
+		self.next = None
+		self.previous = None
+		self.parent = None
+
+
+def _buildHistory(shape):
+	"""Build a chain of wrappers from a shape of message ids and gaps.
+
+	An entry of None makes a wrapper holding no message, which is what Teams
+	produces for timestamps and for the emoji pop-over beside a focused message.
+	Returns the declared container and the messages, keyed by id.
+	"""
+	wrappers = []
+	messages = {}
+	container = appModule.TeamsMessageList()
+	container.IA2Attributes = {"id": "chat-pane-list"}
+	for entry in shape:
+		wrapper = _Ia2Object(role=_Role.GROUPING)
+		wrapper.parent = container
+		if entry is not None:
+			message = appModule.TeamsMessage()
+			message.IA2Attributes = {"id": entry}
+			message.firstChild = None
+			message.next = None
+			message.parent = wrapper
+			wrapper.firstChild = message
+			messages[entry] = message
+		wrappers.append(wrapper)
+	for index, wrapper in enumerate(wrappers):
+		wrapper.previous = wrappers[index - 1] if index else None
+		wrapper.next = wrappers[index + 1] if index + 1 < len(wrappers) else None
+	container.firstChild = wrappers[0] if wrappers else None
+	container.lastChild = wrappers[-1] if wrappers else None
+	return container, messages
 
 
 class _TeamsAppModuleFixture(unittest.TestCase):
@@ -324,6 +390,120 @@ class RecentMessageTests(_TeamsAppModuleFixture):
 			appModule.AppModule.script_readRecentMessage.gestures,
 			[f"kb:control+shift+{number}" for number in range(1, 10)],
 		)
+
+
+class MessageDetectionTests(unittest.TestCase):
+	def testMessageBodiesAreRecognised(self):
+		self.assertTrue(appModule._isMessageObject(_Ia2Object("message-body-1234")))
+
+	def testOtherGroupingsAreNot(self):
+		self.assertFalse(appModule._isMessageObject(_Ia2Object("chat-list-item-9")))
+		self.assertFalse(appModule._isMessageObject(_Ia2Object()))
+
+	def testOtherRolesAreNotEvenWithAMatchingId(self):
+		self.assertFalse(
+			appModule._isMessageObject(_Ia2Object("message-body-1234", role=_Role.LISTITEM)),
+		)
+
+	def testContainerIsRecognisedByItsId(self):
+		self.assertTrue(appModule._isMessageListObject(_Ia2Object("chat-pane-list")))
+		self.assertFalse(appModule._isMessageListObject(_Ia2Object("menur1ri")))
+		self.assertFalse(appModule._isMessageListObject(_Ia2Object()))
+
+	def testOverlayChoiceFollowsDetection(self):
+		instance = appModule.AppModule()
+		try:
+			for obj, expected in (
+				(_Ia2Object("message-body-1"), appModule.TeamsMessage),
+				(_Ia2Object("chat-pane-list"), appModule.TeamsMessageList),
+				(_Ia2Object("something-else"), appModule.TeamsMessageHelpFilterOverlay),
+			):
+				clsList = []
+				instance.chooseNVDAObjectOverlayClasses(obj, clsList)
+				self.assertIs(clsList[0], expected)
+		finally:
+			instance.terminate()
+
+
+class MultilineFlowTests(unittest.TestCase):
+	def testMessagesReportAsListItems(self):
+		# LISTITEM is in silentRolesOnFocus, so NVDA drops the role text for a
+		# named object in both speech and braille. GROUPING is not.
+		self.assertEqual(appModule.TeamsMessage.role, _Role.LISTITEM)
+
+	def testRunIsDeclared(self):
+		self.assertTrue(appModule.TeamsMessage.brlMultilineFlowRun)
+
+	def testMessagesAreReadFromTheirOwnProperties(self):
+		# Chromium exposes IAccessibleText on the message div, but the div's own
+		# text is a single space, which left report current line reading a blank.
+		self.assertIs(appModule.TeamsMessage.TextInfo, _NVDAObjectTextInfo)
+
+	def testWalksForwardAndBack(self):
+		_, messages = _buildHistory(["message-body-1", "message-body-2", "message-body-3"])
+		first, second, third = (messages[f"message-body-{n}"] for n in (1, 2, 3))
+		self.assertIs(first.brlMultilineFlowNext(), second)
+		self.assertIs(second.brlMultilineFlowNext(), third)
+		self.assertIs(third.brlMultilineFlowPrevious(), second)
+		self.assertIs(second.brlMultilineFlowPrevious(), first)
+
+	def testTerminatesWithoutWrappingAround(self):
+		_, messages = _buildHistory(["message-body-1", "message-body-2"])
+		self.assertIsNone(messages["message-body-1"].brlMultilineFlowPrevious())
+		self.assertIsNone(messages["message-body-2"].brlMultilineFlowNext())
+
+	def testSkipsWrappersHoldingNoMessage(self):
+		_, messages = _buildHistory(["message-body-1", None, None, "message-body-2"])
+		first, second = messages["message-body-1"], messages["message-body-2"]
+		self.assertIs(first.brlMultilineFlowNext(), second)
+		self.assertIs(second.brlMultilineFlowPrevious(), first)
+
+	def testDoesNotScanTheWholeHistoryForOneStep(self):
+		# A long stretch of message-less wrappers must end the run rather than
+		# turn a single pan into a walk of the loaded history.
+		_, messages = _buildHistory(["message-body-1"] + [None] * 200 + ["message-body-2"])
+		self.assertIsNone(messages["message-body-1"].brlMultilineFlowNext())
+
+	def testFindsAMessageNestedInsideItsWrapper(self):
+		_, messages = _buildHistory(["message-body-1", "message-body-2"])
+		second = messages["message-body-2"]
+		wrapper = second.parent
+		# Push the message one level deeper, behind an unnamed element.
+		inner = _Ia2Object(firstChild=second)
+		wrapper.firstChild = inner
+		second.parent = inner
+		inner.parent = wrapper
+		self.assertIs(messages["message-body-1"].brlMultilineFlowNext(), second)
+
+
+class PinnedRunTests(unittest.TestCase):
+	def testContainerIsDeclared(self):
+		self.assertTrue(appModule.TeamsMessageList.brlMultilineFlowRunContainer)
+
+	def testAPinStartsAtTheNewestMessage(self):
+		# A chat wants the newest under the fingers. BrlMultiline's own fallback
+		# would find the first member, which is right for a list and wrong here.
+		container, messages = _buildHistory(["message-body-1", "message-body-2", "message-body-3"])
+		self.assertIs(container.brlMultilineFlowRunStart(), messages["message-body-3"])
+
+	def testStartSkipsTrailingWrappersHoldingNoMessage(self):
+		container, messages = _buildHistory(["message-body-1", "message-body-2", None, None])
+		self.assertIs(container.brlMultilineFlowRunStart(), messages["message-body-2"])
+
+	def testStartWalksBackIntoTheRunFromTheEnd(self):
+		container, messages = _buildHistory(["message-body-1", "message-body-2"])
+		start = container.brlMultilineFlowRunStart()
+		self.assertIs(start, messages["message-body-2"])
+		self.assertIs(start.brlMultilineFlowPrevious(), messages["message-body-1"])
+		self.assertIsNone(start.brlMultilineFlowNext())
+
+	def testEmptyHistoryHasNoStart(self):
+		container, _ = _buildHistory([])
+		self.assertIsNone(container.brlMultilineFlowRunStart())
+
+	def testStartDoesNotScanTheWholeHistory(self):
+		container, _ = _buildHistory(["message-body-1"] + [None] * 200)
+		self.assertIsNone(container.brlMultilineFlowRunStart())
 
 
 if __name__ == "__main__":
