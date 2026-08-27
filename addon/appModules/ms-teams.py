@@ -22,7 +22,7 @@ import appModuleHandler
 import braille
 import controlTypes
 from logHandler import log
-from NVDAObjects import NVDAObject
+from NVDAObjects import NVDAObject, NVDAObjectTextInfo
 import scriptHandler
 import ui
 import UIAHandler
@@ -270,6 +270,16 @@ class TeamsMessage(TeamsMessageHelpFilterOverlay):
 	#: Declares that this object belongs to a run BrlMultiline may flow across
 	#: the rows of a multi-line braille display.
 	brlMultilineFlowRun = True
+
+	#: Report the message through its own properties rather than its IAccessible2
+	#: text. Chromium exposes IAccessibleText on the message div, so NVDA picked
+	#: IA2TextTextInfo, but the div's own text is a single space: the message
+	#: content lives in child nodes and the accessible name comes from a related
+	#: element, per the "name-from: related-element" IA2 attribute. That left
+	#: "report current line" reading a blank. NVDAObjectTextInfo exposes
+	#: ``basicText``, which is the name, value and description, so a message reads
+	#: the way a list item in File Explorer does.
+	TextInfo = NVDAObjectTextInfo
 
 	def _flowStep(self, forward: bool):
 		"""Walk one message along the history.
@@ -630,6 +640,8 @@ class AppModule(appModuleHandler.AppModule):
 				origin = "first"
 			info.expand(textInfos.UNIT_LINE)
 			lines.append(f"current line via {origin}: {info.text!r}")
+			story = obj.makeTextInfo(textInfos.POSITION_ALL)
+			lines.append(f"whole story: len={len(story.text)} {story.text!r}")
 		except Exception as error:
 			lines.append(f"report current line would fail with {type(error).__name__}: {error}")
 			log.debugWarning("Could not replay report current line", exc_info=True)

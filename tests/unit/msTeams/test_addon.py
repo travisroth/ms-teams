@@ -34,6 +34,10 @@ class _AppModuleBase:
 		pass
 
 
+class _NVDAObjectTextInfo:
+	"""Stand-in for NVDA's default TextInfo, which exposes basicText."""
+
+
 class _NVDAObjectBase:
 	"""Stand-in for NVDAObject.
 
@@ -139,7 +143,10 @@ stubs = {
 			info=lambda *args, **kwargs: None,
 		),
 	),
-	"NVDAObjects": types.SimpleNamespace(NVDAObject=_NVDAObjectBase),
+	"NVDAObjects": types.SimpleNamespace(
+		NVDAObject=_NVDAObjectBase,
+		NVDAObjectTextInfo=_NVDAObjectTextInfo,
+	),
 	"scriptHandler": types.SimpleNamespace(script=_scriptDecorator),
 	"UIAHandler": types.SimpleNamespace(
 		handler=types.SimpleNamespace(clientObject=uiaClient, baseCacheRequest=object()),
@@ -415,6 +422,11 @@ class MultilineFlowTests(unittest.TestCase):
 
 	def testRunIsDeclared(self):
 		self.assertTrue(appModule.TeamsMessage.brlMultilineFlowRun)
+
+	def testMessagesAreReadFromTheirOwnProperties(self):
+		# Chromium exposes IAccessibleText on the message div, but the div's own
+		# text is a single space, which left report current line reading a blank.
+		self.assertIs(appModule.TeamsMessage.TextInfo, _NVDAObjectTextInfo)
 
 	def testWalksForwardAndBack(self):
 		messages = _buildHistory(["message-body-1", "message-body-2", "message-body-3"])

@@ -5,6 +5,11 @@
 - Chat messages are now reported as list items rather than groupings, which
   also removes the role text from speech and the role abbreviation from braille,
   because `LISTITEM` is a silent role on focus.
+- Chat messages are read from their own properties rather than their
+  IAccessible2 text, so "report current line" reads the message instead of a
+  blank. Chromium exposes IAccessibleText on the message element, but its own
+  text is a single space, because the content sits in child nodes and the name
+  comes from a related element.
 - Chat messages declare a flow run for the BrlMultiline add-on, so a multi-row
   braille display can show a run of messages at once. Nothing is imported from
   BrlMultiline and the add-on behaves identically without it.
