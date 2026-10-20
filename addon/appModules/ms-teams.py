@@ -89,6 +89,11 @@ _ELEMENT_ID_ATTRIBUTES = ("id", "html-id")
 #: Bounds for the flow walk. Each step happens while a reader pans a braille
 #: display, so it must not scan the history to answer one step.
 _FLOW_SIBLING_LIMIT = 12
+_LAYOUT_NAME = "chat"
+_LAYOUT_CLIMB = 8
+_LAYOUT_SEARCH_DEPTH = 6
+_LAYOUT_SEARCH_NODES = 300
+_LAYOUT_MIN_CELLS = 20
 _FLOW_DESCENT_DEPTH = 3
 _FLOW_CHILD_LIMIT = 20
 _RECENT_MESSAGE_GESTURES = tuple(f"kb:control+shift+{number}" for number in range(1, 10))
@@ -222,6 +227,64 @@ def _findMessageWithin(obj, depth: int):
 		if child is None:
 			return None
 		found = _findMessageWithin(child, depth - 1)
+		if found is not None:
+			return found
+		try:
+			child = child.next
+		except Exception:
+			return None
+	return None
+
+
+def _isEditable(obj) -> bool:
+	"""Is this something the user types into, such as the compose box?"""
+	try:
+		return controlTypes.State.EDITABLE in obj.states
+	except Exception:
+		return False
+
+
+def _findMessageListNear(obj):
+	"""Find the chat history beside, or around, an object, or None.
+
+	From a message the history is an ancestor. From the compose box it is not:
+	the two are cousins under the conversation pane, so each ancestor's subtree is
+	searched as well. The search is bounded in depth and in the number of objects
+	examined across the whole climb, because it runs on a focus change and every
+	step is a call into Teams.
+	"""
+	budget = [_LAYOUT_SEARCH_NODES]
+	ancestor = obj
+	for _ in range(_LAYOUT_CLIMB):
+		if ancestor is None:
+			return None
+		if _isMessageListObject(ancestor):
+			return ancestor
+		found = _searchForMessageList(ancestor, _LAYOUT_SEARCH_DEPTH, budget)
+		if found is not None:
+			return found
+		if budget[0] <= 0:
+			return None
+		try:
+			ancestor = ancestor.parent
+		except Exception:
+			return None
+	return None
+
+
+def _searchForMessageList(obj, depth: int, budget: list[int]):
+	"""Look below an object for the chat history, spending from a shared budget."""
+	if depth <= 0:
+		return None
+	try:
+		child = obj.firstChild
+	except Exception:
+		return None
+	while child is not None and budget[0] > 0:
+		budget[0] -= 1
+		if _isMessageListObject(child):
+			return child
+		found = _searchForMessageList(child, depth - 1, budget)
 		if found is not None:
 			return found
 		try:
@@ -385,6 +448,7 @@ class AppModule(appModuleHandler.AppModule):
 		self._originalBrailleMessage = None
 		self._brailleMessageFilter = None
 		self._lastMessageList = None
+		self._layoutMessageList = None
 		self._flowProbeMessage = None
 		if filter_speechSequence is not None:
 			filter_speechSequence.register(self._filterSpeechSequence)
@@ -484,6 +548,52 @@ class AppModule(appModuleHandler.AppModule):
 			ui.message(f"Recent message {messageNumber} is not available")
 			return
 		ui.message(messages[-messageNumber])
+
+	def brlMultilineLayout(self, focus, area):
+		"""Show the chat history above the compose box on a multi-line display.
+
+		Only BrlMultiline calls this, and only where the reader has let
+		applications arrange their braille display. Nothing in NVDA reads it, and
+		this module imports nothing from that add-on.
+
+		Offered while the focus is on a message or in a field to type in, and the
+		chat history can be found near it. The history is given as a method rather
+		than an object, so that switching to another chat, which replaces the
+		history element, is picked up when BrlMultiline asks again.
+
+		:param focus: the object with the focus.
+		:param area: the free part of the display, with ``rows`` and ``columns``.
+		:return: the layout, or None where there is none.
+		"""
+		try:
+			if not isinstance(focus, TeamsMessage) and not _isEditable(focus):
+				return None
+			messageList = _findMessageListNear(focus)
+		except Exception:
+			log.debugWarning("Could not find the Teams chat history for the braille layout", exc_info=True)
+			return None
+		if messageList is None:
+			return None
+		self._layoutMessageList = messageList
+		if area.rows > 1:
+			# Two rows for what is being typed when there are rows to spare, so a
+			# long message is not read a row at a time.
+			focusSize = 2 if area.rows >= 6 else 1
+		else:
+			if area.columns < _LAYOUT_MIN_CELLS:
+				return None
+			focusSize = area.columns // 2
+		return {
+			"name": _LAYOUT_NAME,
+			"segments": [
+				{"show": self._layoutHistory},
+				{"size": focusSize, "show": "focus"},
+			],
+		}
+
+	def _layoutHistory(self):
+		"""The chat history the layout last found, asked for each time it refreshes."""
+		return self._layoutMessageList
 
 	def chooseNVDAObjectOverlayClasses(self, obj, clsList):
 		# The help filter is applied unconditionally. Teams adds the help text

@@ -506,5 +506,115 @@ class PinnedRunTests(unittest.TestCase):
 		self.assertIsNone(container.brlMultilineFlowRunStart())
 
 
+def _conversation(shape=("message-body-1", "message-body-2")):
+	"""A conversation pane: the history, and beside it a wrapper holding the compose box.
+
+	Returns the pane, the history, its messages and the compose box.
+	"""
+	pane = _Ia2Object("conversation")
+	history, messages = _buildHistory(list(shape))
+	composeWrapper = _Ia2Object()
+	compose = _Ia2Object(role=None)
+	compose.states = {_State.EDITABLE}
+	pane.firstChild = history
+	history.parent = pane
+	history.next = composeWrapper
+	composeWrapper.parent = pane
+	composeWrapper.firstChild = compose
+	compose.parent = composeWrapper
+	return pane, history, messages, compose
+
+
+class ChatLayoutTests(_TeamsAppModuleFixture):
+	"""The chat history above the compose box, offered to BrlMultiline."""
+
+	monarch = types.SimpleNamespace(rows=10, columns=32)
+	focus80 = types.SimpleNamespace(rows=1, columns=80)
+
+	def testOfferedFromTheComposeBox(self):
+		_pane, history, _messages, compose = _conversation()
+		layout = self.instance.brlMultilineLayout(compose, self.monarch)
+		self.assertEqual(layout["name"], "chat")
+		show = layout["segments"][0]["show"]
+		self.assertTrue(callable(show))
+		self.assertIs(show(), history)
+		self.assertEqual(layout["segments"][1], {"size": 2, "show": "focus"})
+
+	def testOfferedFromAMessage(self):
+		_pane, history, messages, _compose = _conversation()
+		layout = self.instance.brlMultilineLayout(messages["message-body-2"], self.monarch)
+		self.assertIs(layout["segments"][0]["show"](), history)
+
+	def testOneRowForTheFocusOnAShortArea(self):
+		_pane, _history, _messages, compose = _conversation()
+		layout = self.instance.brlMultilineLayout(compose, types.SimpleNamespace(rows=4, columns=32))
+		self.assertEqual(layout["segments"][1]["size"], 1)
+
+	def testHalvesASingleRow(self):
+		_pane, _history, _messages, compose = _conversation()
+		layout = self.instance.brlMultilineLayout(compose, self.focus80)
+		self.assertEqual(layout["segments"][1]["size"], 40)
+
+	def testNoneOnATinySingleRow(self):
+		_pane, _history, _messages, compose = _conversation()
+		self.assertIsNone(
+			self.instance.brlMultilineLayout(compose, types.SimpleNamespace(rows=1, columns=14))
+		)
+
+	def testNoneWithoutAHistoryNearby(self):
+		field = _Ia2Object(role=None)
+		field.states = {_State.EDITABLE}
+		self.assertIsNone(self.instance.brlMultilineLayout(field, self.monarch))
+
+	def testNoneForSomethingThatIsNeitherMessageNorField(self):
+		pane, _history, _messages, _compose = _conversation()
+		self.assertIsNone(self.instance.brlMultilineLayout(pane, self.monarch))
+
+	def testAnotherChatIsPickedUp(self):
+		"""Switching chats replaces the history, and the method answers with the new one."""
+		_pane, first, _messages, compose = _conversation()
+		show = self.instance.brlMultilineLayout(compose, self.monarch)["segments"][0]["show"]
+		_pane, second, _messages, compose = _conversation()
+		self.instance.brlMultilineLayout(compose, self.monarch)
+		self.assertIs(show(), second)
+		self.assertIsNot(second, first)
+
+	def testTheSearchIsBounded(self):
+		"""A wide pane ends the search rather than walking all of Teams on a focus change."""
+		pane = _Ia2Object("conversation")
+		previous = None
+		for _ in range(appModule._LAYOUT_SEARCH_NODES + 50):
+			node = _Ia2Object()
+			node.parent = pane
+			if previous is None:
+				pane.firstChild = node
+			else:
+				previous.next = node
+			previous = node
+		history, _messages = _buildHistory(["message-body-1"])
+		previous.next = history
+		history.parent = pane
+		compose = _Ia2Object(role=None)
+		compose.states = {_State.EDITABLE}
+		compose.parent = pane
+		self.assertIsNone(self.instance.brlMultilineLayout(compose, self.monarch))
+
+	def testAFailingTreeCostsOnlyTheLayout(self):
+		class Broken:
+			states = {_State.EDITABLE}
+
+			@property
+			def parent(self):
+				raise RuntimeError("COM failed")
+
+			@property
+			def firstChild(self):
+				raise RuntimeError("COM failed")
+
+			IA2Attributes = {}
+
+		self.assertIsNone(self.instance.brlMultilineLayout(Broken(), self.monarch))
+
+
 if __name__ == "__main__":
 	unittest.main()
