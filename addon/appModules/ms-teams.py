@@ -556,17 +556,19 @@ class AppModule(appModuleHandler.AppModule):
 		applications arrange their braille display. Nothing in NVDA reads it, and
 		this module imports nothing from that add-on.
 
-		Offered while the focus is on a message or in a field to type in, and the
-		chat history can be found near it. The history is given as a method rather
-		than an object, so that switching to another chat, which replaces the
-		history element, is picked up when BrlMultiline asks again.
+		Offered only while the focus is in a field to type in, such as the compose
+		box, and the chat history can be found near it. Not on a message: moving
+		into the history means the reader wants the whole display reading it, and
+		answering None there gives them that. The history is given as a method
+		rather than an object, so that switching to another chat, which replaces
+		the history element, is picked up when BrlMultiline asks again.
 
 		:param focus: the object with the focus.
 		:param area: the free part of the display, with ``rows`` and ``columns``.
 		:return: the layout, or None where there is none.
 		"""
 		try:
-			if not isinstance(focus, TeamsMessage) and not _isEditable(focus):
+			if isinstance(focus, TeamsMessage) or not _isEditable(focus):
 				return None
 			messageList = _findMessageListNear(focus)
 		except Exception:

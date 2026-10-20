@@ -540,10 +540,17 @@ class ChatLayoutTests(_TeamsAppModuleFixture):
 		self.assertIs(show(), history)
 		self.assertEqual(layout["segments"][1], {"size": 2, "show": "focus"})
 
-	def testOfferedFromAMessage(self):
-		_pane, history, messages, _compose = _conversation()
-		layout = self.instance.brlMultilineLayout(messages["message-body-2"], self.monarch)
-		self.assertIs(layout["segments"][0]["show"](), history)
+	def testNotOfferedFromAMessage(self):
+		"""Moving into the history means the reader wants the whole display on it."""
+		_pane, _history, messages, _compose = _conversation()
+		self.assertIsNone(self.instance.brlMultilineLayout(messages["message-body-2"], self.monarch))
+
+	def testNotOfferedFromAMessageEvenIfItIsEditable(self):
+		"""A message is the history, whatever states Teams gives it."""
+		_pane, _history, messages, _compose = _conversation()
+		message = messages["message-body-2"]
+		message.states = {_State.EDITABLE}
+		self.assertIsNone(self.instance.brlMultilineLayout(message, self.monarch))
 
 	def testOneRowForTheFocusOnAShortArea(self):
 		_pane, _history, _messages, compose = _conversation()
