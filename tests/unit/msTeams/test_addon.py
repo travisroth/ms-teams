@@ -137,6 +137,7 @@ stubs = {
 	"appModuleHandler": types.SimpleNamespace(AppModule=_AppModuleBase),
 	"braille": types.SimpleNamespace(handler=brailleHandler),
 	"controlTypes": types.SimpleNamespace(Role=_Role, State=_State),
+	"globalPluginHandler": types.SimpleNamespace(runningPlugins=set()),
 	"logHandler": types.SimpleNamespace(
 		log=types.SimpleNamespace(
 			debugWarning=lambda *args, **kwargs: None,
@@ -621,6 +622,55 @@ class ChatLayoutTests(_TeamsAppModuleFixture):
 			IA2Attributes = {}
 
 		self.assertIsNone(self.instance.brlMultilineLayout(Broken(), self.monarch))
+
+
+class _BrlMultilinePlugin:
+	"""Stands in for BrlMultiline's global plugin, recording what it is told."""
+
+	def __init__(self):
+		self.told = []
+
+	def brlMultilineContentChanged(self, appModule=None):
+		self.told.append(appModule)
+
+
+class LiveRegionTests(_TeamsAppModuleFixture):
+	"""A live region change tells BrlMultiline the chat may have changed."""
+
+	def setUp(self):
+		super().setUp()
+		self.plugins = stubs["globalPluginHandler"].runningPlugins
+		self.addCleanup(self.plugins.clear)
+
+	def testBrlMultilineIsTold(self):
+		plugin = _BrlMultilinePlugin()
+		self.plugins.add(plugin)
+		passedOn = []
+		self.instance.event_liveRegionChange(object(), lambda: passedOn.append(True))
+		self.assertEqual(passedOn, [True])
+		self.assertEqual(plugin.told, [self.instance])
+
+	def testOtherGlobalPluginsAreLeftAlone(self):
+		other = object()
+		self.plugins.add(other)
+		passedOn = []
+		self.instance.event_liveRegionChange(object(), lambda: passedOn.append(True))
+		self.assertEqual(passedOn, [True])
+
+	def testWithoutBrlMultilineNothingChanges(self):
+		passedOn = []
+		self.instance.event_liveRegionChange(object(), lambda: passedOn.append(True))
+		self.assertEqual(passedOn, [True])
+
+	def testAFailureInBrlMultilineCostsNothing(self):
+		class Broken:
+			def brlMultilineContentChanged(self, appModule=None):
+				raise RuntimeError("broken")
+
+		self.plugins.add(Broken())
+		passedOn = []
+		self.instance.event_liveRegionChange(object(), lambda: passedOn.append(True))
+		self.assertEqual(passedOn, [True])
 
 
 if __name__ == "__main__":

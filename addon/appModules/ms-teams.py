@@ -21,6 +21,7 @@ import api
 import appModuleHandler
 import braille
 import controlTypes
+import globalPluginHandler
 from logHandler import log
 from NVDAObjects import NVDAObject, NVDAObjectTextInfo
 import scriptHandler
@@ -611,6 +612,33 @@ class AppModule(appModuleHandler.AppModule):
 		else:
 			overlay = TeamsMessageHelpFilterOverlay
 		clsList.insert(0, overlay)
+
+	def event_liveRegionChange(self, obj, nextHandler):
+		"""Tell BrlMultiline the chat may have changed, so its layout shows it now.
+
+		While Teams has the focus, a new message arrives as a live region change. Without
+		this BrlMultiline would find the message on its next refresh, a fraction of a
+		second later. It ignores the call unless this module's layout is on the display, so
+		it costs nothing otherwise.
+		"""
+		if self._traceEvents:
+			self._logTracedEvent("liveRegionChange", obj, {})
+		nextHandler()
+		self._tellBrlMultiline()
+
+	def _tellBrlMultiline(self) -> None:
+		"""Tell BrlMultiline, if it is running, that what this module's layout shows changed.
+
+		Found by name on the running global plugins, so this module imports nothing from
+		that add-on and works the same without it.
+		"""
+		try:
+			for plugin in tuple(globalPluginHandler.runningPlugins):
+				changed = getattr(plugin, "brlMultilineContentChanged", None)
+				if changed is not None:
+					changed(self)
+		except Exception:
+			log.debugWarning("Could not tell BrlMultiline the chat changed", exc_info=True)
 
 	def event_UIA_notification(
 		self,
