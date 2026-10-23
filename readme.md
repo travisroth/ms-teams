@@ -85,6 +85,11 @@ limit, so a gap does not end the run and a long stretch cannot turn one pan into
 a scan of the loaded history. The walk stops at the ends rather than wrapping,
 and never moves focus.
 
+### Chat as part of app layout
+
+With BrlMultiline add-on installed and enabled using a multi-line Braille setup, the MS-Teams an show the chat history and chat edit field together. Note: this add-on will also divide a single display so if you have enough cells you can do that as well. 
+To enable it you must enable the BrlMultiline setting "Let applications arrange this display".
+
 ## Diagnostics
 
 Two commands help identify where unwanted output originates.
@@ -105,7 +110,7 @@ Two commands help identify where unwanted output originates.
 ## Compatibility
 
 - Minimum NVDA version: 2026.1
-- Last tested NVDA version: 2026.3
+- Last tested NVDA version: 2027.1
 - Application: New Microsoft Teams (`ms-teams.exe`)
 
 ## Installation
@@ -129,6 +134,11 @@ Two commands help identify where unwanted output originates.
 
 If the add-on does not activate, press NVDA+F1 on a Teams message and verify
 that the AppModule shown in Developer Information is `ms-teams`.
+
+## Development & Acknowledgments
+
+This project was independently designed, architected, and maintained by Travis Roth, with AI assistants (such as Claude and ChatGPT) utilized for code drafting, refactoring, and documentation support.
+
 
 ## License
 
