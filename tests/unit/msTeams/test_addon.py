@@ -566,7 +566,7 @@ class ChatLayoutTests(_TeamsAppModuleFixture):
 	def testNoneOnATinySingleRow(self):
 		_pane, _history, _messages, compose = _conversation()
 		self.assertIsNone(
-			self.instance.brlMultilineLayout(compose, types.SimpleNamespace(rows=1, columns=14))
+			self.instance.brlMultilineLayout(compose, types.SimpleNamespace(rows=1, columns=14)),
 		)
 
 	def testNoneWithoutAHistoryNearby(self):

@@ -1,8 +1,8 @@
 # Microsoft Teams Accessibility Enhancements for NVDA
 
 * Author: Travis Roth
-* NVDA compatibility: 2026.3 and later. 
-*  Download: [MS-Teams Add-on 2026.3.0](https://github.com/travisroth/ms-teams/releases/download/v2026.3.0/ms-teams-2026.3.0.nvda-addon)
+* NVDA compatibility: 2026.3 and later.
+*  Download: [MS-Teams Add-on 2026.3.0](https://github.com/travisroth/ms-teams/releases/download/v2026.3.0/Ms-Teams-2026.3.0.nvda-addon)
 
 
 This add-on improves access to the New Microsoft Teams desktop client
@@ -92,7 +92,7 @@ and never moves focus.
 
 ### Chat as part of app layout
 
-With BrlMultiline add-on installed and enabled using a multi-line Braille setup, the MS-Teams an show the chat history and chat edit field together. Note: this add-on will also divide a single display so if you have enough cells you can do that as well. 
+With BrlMultiline add-on installed and enabled using a multi-line Braille setup, the MS-Teams an show the chat history and chat edit field together. Note: this add-on will also divide a single display so if you have enough cells you can do that as well.
 To enable it you must enable the BrlMultiline setting "Let applications arrange this display".
 
 ## Diagnostics

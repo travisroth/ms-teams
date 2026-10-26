@@ -17,7 +17,7 @@ addon_info = AddonInfo(
 	addon_version="2026.3.0",
 	# Translators: Changes in this release, shown in NVDA's Add-on Store.
 	addon_changelog=_(
-"Added BrlMultiline add-on Support."
+"Added BrlMultiline add-on Support.",
 	),
 	addon_author="Ryan Praeuner; Travis Roth <travis@travisroth.com>",
 	addon_url="https://github.com/travisroth/ms-teams",
