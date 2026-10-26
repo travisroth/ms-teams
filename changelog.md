@@ -1,5 +1,10 @@
 # Changes
 
+## 2026.3.0
+
+- Added BrlMultiline add-on support.
+- The minimum supported NVDA version is now 2026.3.
+
 ## 1.6.0
 
 - Chat messages are now reported as list items rather than groupings, which

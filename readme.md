@@ -92,7 +92,7 @@ and never moves focus.
 
 ### Chat as part of app layout
 
-With BrlMultiline add-on installed and enabled using a multi-line Braille setup, the MS-Teams an show the chat history and chat edit field together. Note: this add-on will also divide a single display so if you have enough cells you can do that as well.
+With BrlMultiline add-on installed and enabled using a multi-line Braille setup, the MS-Teams add-on can show the chat history and chat edit field together. Note: this add-on will also divide a single display so if you have enough cells you can do that as well.
 To enable it you must enable the BrlMultiline setting "Let applications arrange this display".
 
 ## Diagnostics
