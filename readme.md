@@ -139,6 +139,9 @@ that the AppModule shown in Developer Information is `ms-teams`.
 
 This project was independently designed, architected, and maintained by Travis Roth, with AI assistants (such as Claude and ChatGPT) utilized for code drafting, refactoring, and documentation support.
 
+## Copyright
+
+Copyright (c) 2026, Travis Roth.
 
 ## License
 
