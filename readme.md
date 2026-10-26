@@ -1,5 +1,10 @@
 # Microsoft Teams Accessibility Enhancements for NVDA
 
+* Author: Travis Roth
+* NVDA compatibility: 2026.3 and later. 
+*  Download: [MS-Teams Add-on 2026.3.0](https://github.com/travisroth/ms-teams/releases/download/v2026.3.0/ms-teams-2026.3.0.nvda-addon)
+
+
 This add-on improves access to the New Microsoft Teams desktop client
 (`ms-teams.exe`). It filters the repetitive instruction beginning with:
 
