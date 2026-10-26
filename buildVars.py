@@ -11,9 +11,10 @@ addon_info = AddonInfo(
 	# Translators: Long add-on description shown in NVDA's Add-on Store.
 	addon_description=_(
 		"Filters repetitive message help and adds focus-free recent-message reading commands "
-		+ "for the New Microsoft Teams client.",
+		+ "for the New Microsoft Teams client. ",
+		"Demonstrate multi-line Braille support with the BrlMultiline NVDA ad-on.",
 	),
-	addon_version="1.6.0",
+	addon_version="2026.3.0",
 	# Translators: Changes in this release, shown in NVDA's Add-on Store.
 	addon_changelog=_(
 "Added BrlMultiline add-on Support."
